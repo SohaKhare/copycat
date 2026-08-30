@@ -5,12 +5,35 @@ import { PageHeader } from "@/components/app/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { IconActivity } from "@/components/ui/Icons";
+import { IconActivity, IconArrowRight } from "@/components/ui/Icons";
+import { Markdown } from "@/components/ui/Markdown";
+import { cn } from "@/lib/utils";
 import { ApiError, getExecutionHistory, type ExecutionHistoryItem } from "@/lib/api";
+
+function resultMessage(item: ExecutionHistoryItem): string {
+  const result = item.execution_result;
+  if (
+    result &&
+    typeof result === "object" &&
+    typeof (result as { message?: unknown }).message === "string"
+  ) {
+    return (result as { message: string }).message;
+  }
+  return "No response was recorded for this run.";
+}
 
 export default function ActivityPage() {
   const [history, setHistory] = useState<ExecutionHistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+
+  const toggle = (id: string) =>
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     getExecutionHistory()
@@ -57,23 +80,49 @@ export default function ActivityPage() {
 
       {history !== null && history.length > 0 && (
         <ul className="flex flex-col divide-y divide-line">
-          {history.map((item) => (
-            <li key={item.id} className="flex items-start gap-3 py-4">
-              <Badge tone={item.success ? "success" : "error"}>
-                {item.success ? "Success" : "Failed"}
-              </Badge>
-              <div className="min-w-0 flex-1">
-                <p className="text-small text-ink">
-                  Ran <span className="font-medium">{item.skill_name}</span>{" "}
-                  for &ldquo;{item.command}&rdquo;
-                </p>
-                <p className="mt-1 text-caption text-ink-muted">
-                  {item.environment}
-                  {item.created_at ? ` · ${new Date(item.created_at).toLocaleString()}` : ""}
-                </p>
-              </div>
-            </li>
-          ))}
+          {history.map((item) => {
+            const open = openIds.has(item.id);
+            return (
+              <li key={item.id} className="py-2">
+                <button
+                  type="button"
+                  onClick={() => toggle(item.id)}
+                  aria-expanded={open}
+                  className="flex w-full items-start gap-3 py-2 text-left"
+                >
+                  <Badge tone={item.success ? "success" : "error"}>
+                    {item.success ? "Success" : "Failed"}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-small text-ink">
+                      Ran <span className="font-medium">{item.skill_name}</span>{" "}
+                      for &ldquo;{item.command}&rdquo;
+                    </p>
+                    <p className="mt-1 text-caption text-ink-muted">
+                      {item.environment}
+                      {item.created_at
+                        ? ` · ${new Date(item.created_at).toLocaleString()}`
+                        : ""}
+                    </p>
+                  </div>
+                  <IconArrowRight
+                    className={cn(
+                      "mt-1 h-4 w-4 shrink-0 text-ink-muted transition-transform duration-200",
+                      open && "rotate-90",
+                    )}
+                  />
+                </button>
+
+                {open && (
+                  <div className="mb-3 ml-[4.75rem] rounded-md border border-line bg-surface p-4">
+                    <Markdown className="text-small text-ink-secondary">
+                      {resultMessage(item)}
+                    </Markdown>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </>
