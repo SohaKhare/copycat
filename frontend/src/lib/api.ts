@@ -70,6 +70,8 @@ export type UploadVideoResponse = {
   video_id: string;
   original_filename: string | null;
   frames_extracted: number;
+  privacy_filter_applied?: boolean;
+  privacy_regions_redacted?: number;
   analysis: LearningAnalysis;
   saved_skills: SavedSkill[];
 };
@@ -354,9 +356,10 @@ export function uploadVideo(
   options: {
     onProgress?: (percent: number | null) => void;
     signal?: AbortSignal;
+    privacyFilter?: boolean;
   } = {},
 ): Promise<UploadVideoResponse> {
-  const { onProgress, signal } = options;
+  const { onProgress, signal, privacyFilter = true } = options;
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -438,6 +441,7 @@ export function uploadVideo(
 
     const formData = new FormData();
     formData.append("file", file, file.name);
+    formData.append("privacy_filter", privacyFilter ? "true" : "false");
     xhr.send(formData);
   });
 }

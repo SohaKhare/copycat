@@ -5,7 +5,7 @@ from asyncio import to_thread
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from google.genai.errors import ClientError, ServerError
@@ -35,6 +35,7 @@ from backend.storage.skills import (
 )
 
 from backend.video.processor import extract_frames
+from backend.video.privacy import apply_privacy_filter
 
 from backend.storage.execution_history import (
     get_execution,
@@ -121,8 +122,15 @@ def health_check():
     }
 
 
+def _parse_privacy_filter_flag(value: str) -> bool:
+    return value.strip().lower() not in ("false", "0", "no", "off")
+
+
 @app.post("/upload-video")
-async def upload_video(file: UploadFile = File(...)):
+async def upload_video(
+    file: UploadFile = File(...),
+    privacy_filter: str = Form(default="true"),
+):
 
     if not file.content_type or not file.content_type.startswith("video/"):
         raise HTTPException(
@@ -144,7 +152,14 @@ async def upload_video(file: UploadFile = File(...)):
 
     video_frames_dir = FRAMES_DIR / video_id
 
-    log.info("/upload-video %s (%s bytes)", file.filename, len(contents))
+    privacy_filter_enabled = _parse_privacy_filter_flag(privacy_filter)
+
+    log.info(
+        "/upload-video %s (%s bytes, privacy_filter=%s)",
+        file.filename,
+        len(contents),
+        privacy_filter_enabled,
+    )
 
     try:
         frames = await to_thread(
@@ -152,6 +167,12 @@ async def upload_video(file: UploadFile = File(...)):
             video_path=file_path,
             output_dir=video_frames_dir,
             interval_seconds=1.0,
+        )
+
+        frames, privacy_result = await to_thread(
+            apply_privacy_filter,
+            frames,
+            enabled=privacy_filter_enabled,
         )
 
         analysis = await to_thread(analyze_frames, frames)
@@ -215,6 +236,8 @@ async def upload_video(file: UploadFile = File(...)):
         "video_id": video_id,
         "original_filename": file.filename,
         "frames_extracted": len(frames),
+        "privacy_filter_applied": privacy_result.applied,
+        "privacy_regions_redacted": privacy_result.regions_redacted,
         "analysis": analysis,
         "saved_skills": saved_skills,
     }

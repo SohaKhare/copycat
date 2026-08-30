@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { uploadVideo, ApiError } from "@/lib/api";
 import type { UploadVideoResponse } from "@/lib/api";
+import { getHidePersonalDetails } from "@/lib/privacy-settings";
 import { TeachSuccess } from "@/components/teach/TeachSuccess";
 import {
   DefaultDropZone,
@@ -83,6 +84,7 @@ export function TeachUpload() {
       const response = await uploadVideo(file, {
         onProgress: (percent) => setProgress(percent),
         signal: controller.signal,
+        privacyFilter: getHidePersonalDetails(),
       });
       setResult(response);
       setPhase("success");

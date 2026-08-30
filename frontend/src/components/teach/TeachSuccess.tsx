@@ -15,6 +15,7 @@ import { Card } from "@/components/ui/Card";
 import { IconCheck } from "@/components/ui/Icons";
 import { Input } from "@/components/ui/Input";
 import { cn } from "@/lib/utils";
+import { PRIVACY_STATUS_MESSAGE } from "@/lib/privacy-settings";
 
 type SkillStep = {
   step_number: number;
@@ -299,7 +300,12 @@ function SkillReviewCard({ skill, onUpdate }: SkillReviewCardProps) {
  * edit candidate skills before CopyCat can run them from the dashboard.
  */
 export function TeachSuccess({ result }: { result: UploadVideoResponse }) {
-  const { analysis, frames_extracted, saved_skills } = result;
+  const {
+    analysis,
+    frames_extracted,
+    saved_skills,
+    privacy_filter_applied,
+  } = result;
   const [skills, setSkills] = useState<SavedSkill[]>(saved_skills);
 
   function updateSkill(updated: SavedSkill) {
@@ -328,6 +334,14 @@ export function TeachSuccess({ result }: { result: UploadVideoResponse }) {
           down into the steps that make up the workflow. Review each skill below
           — CopyCat can only run skills you accept.
         </p>
+        {privacy_filter_applied && (
+          <p
+            className="max-w-xl rounded-md border border-line bg-surface px-4 py-3 text-small text-ink-secondary"
+            role="status"
+          >
+            🔒 {PRIVACY_STATUS_MESSAGE}
+          </p>
+        )}
       </div>
 
       {skills.length > 0 ? (
