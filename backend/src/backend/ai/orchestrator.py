@@ -1,5 +1,6 @@
 """Sequential multi-skill orchestration: plan, execute, and merge results."""
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -9,8 +10,13 @@ from backend.ai.planner import (
     create_execution_plan,
 )
 from backend.ai.user_reply import Modality, UserReply, build_multi_skill_reply
-from backend.executors.browser import BrowserExecutionSession, acquire_browser_session
+from backend.executors.browser import (
+    BrowserExecutionSession,
+    acquire_browser_session,
+    release_browser_session,
+)
 from backend.executors.router import execute_plan
+from backend.logging_setup import log
 from backend.models.execution import (
     ExecutionPlan,
     ExecutionResult,
@@ -63,8 +69,16 @@ def orchestrate_skills(
                 stopped_at_order=stopped_at_order,
             )
 
-    browser_session = acquire_browser_session()
+    needs_browser = any(
+        item.environment.lower() == "browser" for item in ordered_items
+    )
+    browser_session: BrowserExecutionSession | None = None
+    orchestration_started = time.monotonic()
+
     try:
+        if needs_browser:
+            browser_session = acquire_browser_session()
+
         if _should_merge_browser_skills(ordered_items):
             runs, stopped_at_order = _execute_merged_browser_skills(
                 command=command,
@@ -81,7 +95,15 @@ def orchestrate_skills(
                 browser_session=browser_session,
             )
     finally:
-        browser_session.close()
+        if browser_session is not None:
+            release_browser_session(browser_session)
+
+    log.info(
+        "[copycat.orchestrator] finished in %.0fms (browser=%s skills=%d)",
+        (time.monotonic() - orchestration_started) * 1000,
+        needs_browser,
+        len(ordered_items),
+    )
 
     reply = build_multi_skill_reply(
         command=command,
@@ -109,8 +131,11 @@ def _execute_merged_browser_skills(
     command: str,
     ordered_items: list[ResolvedSkillItem],
     skills_by_id: dict[str, dict],
-    browser_session: BrowserExecutionSession,
+    browser_session: BrowserExecutionSession | None,
 ) -> tuple[list[SkillRunResult], int | None]:
+    if browser_session is None:
+        raise RuntimeError("Merged browser skills require a browser session.")
+
     compound_plan = build_compound_browser_plan(
         command=command,
         items=ordered_items,
@@ -173,7 +198,7 @@ def _execute_sequential_skills(
     resolution: ResolveSkillsResult,
     ordered_items: list[ResolvedSkillItem],
     skills_by_id: dict[str, dict],
-    browser_session: BrowserExecutionSession,
+    browser_session: BrowserExecutionSession | None,
 ) -> tuple[list[SkillRunResult], int | None]:
     runs: list[SkillRunResult] = []
     stopped_at_order: int | None = None
@@ -189,7 +214,16 @@ def _execute_sequential_skills(
         execution_plan = planned_skill.execution_plan
 
         if item.environment.lower() == "browser":
+            if browser_session is None:
+                raise RuntimeError("Browser skill requires a browser session.")
+            skill_started = time.monotonic()
             execution_result = browser_session.execute_plan(execution_plan)
+            log.info(
+                "[copycat.orchestrator] browser skill=%r finished in %.0fms success=%s",
+                item.skill_name,
+                (time.monotonic() - skill_started) * 1000,
+                execution_result.success,
+            )
         else:
             execution_result = execute_plan(execution_plan)
 

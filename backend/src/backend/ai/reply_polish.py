@@ -1,7 +1,10 @@
 """Polish raw agent output into a short user-facing summary."""
 
+import time
+
 from backend.ai.gemini_client import call_gemini
 from backend.env_config import get_gemini_text_model
+from backend.logging_setup import log
 
 
 def polish_reply_text(
@@ -31,24 +34,57 @@ The user asked CopyCat:
 Raw execution output:
 {raw_message}
 
-Write a concise reply (2-4 sentences) summarizing the outcome for the user.
-- Focus on WHAT was found or done, not HOW (no step numbers, no sub-task labels).
-- If there is an email summary, quote or paraphrase the key result.
-- Do not mention skill names or internal workflow steps.
+Write the reply the user actually wants to read.
+- If they asked for a summary, return the email/ChatGPT content itself
+  (senders, subjects, offers, key facts) as a short numbered list.
+- Never write process recap like "I searched", "I provided to ChatGPT",
+  or "I successfully retrieved".
+- Do not mention skill names or tool steps.
 - Do not repeat the user's command back verbatim.
 
-Return ONLY the summary text, no JSON.
+Return ONLY that content, no JSON.
 """
 
+    # The browser agent already writes a user-facing summary. Another
+    # Gemini round-trip was adding ~5s after the task was done.
+    if _already_concise(raw_message):
+        log.info("[copycat.pipeline] reply polish skipped (agent text already concise)")
+        return raw_message
+
     try:
+        polish_started = time.monotonic()
         response = call_gemini(
             model=get_gemini_text_model(),
             contents=prompt,
+        )
+        log.info(
+            "[copycat.pipeline] reply polish finished in %.0fms",
+            (time.monotonic() - polish_started) * 1000,
         )
         polished = (response.text or "").strip()
         return polished or _fallback_summary(raw_message)
     except Exception:
         return _fallback_summary(raw_message)
+
+
+def _already_concise(raw_message: str) -> bool:
+    lower = raw_message.lower()
+    if "sub-task" in lower:
+        return False
+    if any(
+        marker in lower
+        for marker in (
+            "i have successfully",
+            "i successfully",
+            "i have searched",
+            "i then provided",
+            "i then used",
+        )
+    ):
+        return False
+    if len(raw_message) > 700:
+        return False
+    return True
 
 
 def _fallback_summary(raw_message: str) -> str:

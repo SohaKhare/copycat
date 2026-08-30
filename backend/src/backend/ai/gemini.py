@@ -151,6 +151,97 @@ Return one candidate skill for the main demonstrated task.
     return LearningResult(**result)
 
 
+def analyze_description(description: str):
+    """
+    Turn a spoken or typed workflow description into the same candidate
+    skill shape as a screen recording analysis.
+    """
+
+    prompt = f"""
+You are creating a reusable digital skill for CopyCat from a user's
+spoken or typed description of a workflow they want the assistant to
+perform later.
+
+USER DESCRIPTION:
+\"\"\"{description}\"\"\"
+
+Convert this into one candidate skill with ordered execution steps.
+
+IMPORTANT RULES:
+
+- Infer only what the description supports. Do not invent unrelated steps.
+- Make action names concise and machine-readable.
+- Put action-specific details (URLs, search terms, folder names) in observed_data.
+- The skill must require user validation.
+- Assign confidence based on how clearly the description specifies the task.
+
+Choose exactly one environment:
+
+- browser — any website or web-app task (Gmail, Drive, ChatGPT, dashboards)
+- windows — Windows desktop and file operations
+
+Return ONLY valid JSON.
+
+Use exactly this structure:
+
+{{
+  "goal": "string",
+
+  "observations": [
+    {{
+      "observable_fact": {{
+        "item": "string or null",
+        "item_type": "string or null",
+        "source_location": "string or null",
+        "destination": "string or null"
+      }},
+
+      "action": {{
+        "type": "string"
+      }},
+
+      "inferred_decision": {{
+        "description": "string",
+        "confidence": "low | medium | high"
+      }}
+    }}
+  ],
+
+  "candidate_skills": [
+    {{
+      "name": "string",
+      "description": "string",
+      "environment": "browser | windows",
+      "steps": [
+        {{
+          "step_number": 1,
+          "action": "machine_readable_action_name",
+          "description": "string",
+          "observed_data": {{}}
+        }}
+      ],
+      "confidence": "low | medium | high",
+      "requires_user_validation": true,
+      "status": "pending"
+    }}
+  ]
+}}
+
+Return one candidate skill for the main described task.
+"""
+
+    response = call_gemini(model=ANALYSIS_MODEL, contents=prompt)
+    cleaned_text = clean_json_response(response.text or "")
+    try:
+        result = json.loads(cleaned_text)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            "CopyCat couldn't turn that description into a skill. "
+            "Try a clearer multi-step workflow."
+        ) from error
+    return LearningResult(**result)
+
+
 def clean_json_response(text: str):
     text = text.strip()
 

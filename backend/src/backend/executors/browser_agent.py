@@ -9,11 +9,13 @@ aren't known until the page actually loads.
 from google.adk.agents import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.models.lite_llm import LiteLlm
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 from google.genai import types
 
 from backend.env_config import (
     get_anthropic_api_key,
     get_gemini_api_keys,
+    get_groq_api_key,
     get_openai_api_key,
     resolve_browser_model_name,
 )
@@ -31,20 +33,29 @@ GEMINI_RETRY_OPTIONS = types.HttpRetryOptions(
 )
 
 INSTRUCTION = (
-    "You are a browser automation agent for CopyCat. You have Playwright "
-    "browser tools: browser_navigate, browser_snapshot, browser_click, "
-    "browser_type, browser_wait_for, and others.\n\n"
-    "Rules:\n"
-    "- Complete all sub-tasks in one session without restarting the browser.\n"
-    "- Minimize snapshots — only call browser_snapshot when you need element "
-    "refs before a click or type.\n"
-    "- Work step by step. Do not repeat navigation already done for prior "
-    "sub-tasks.\n"
-    "- If a tool returns a permission error, stop retrying it and report it.\n"
-    "- To copy text: read it from browser_snapshot and call set_clipboard; "
-    "do not use site copy buttons.\n"
-    "- When finished, give one short summary (one line per sub-task if "
-    "multiple)."
+    "You are a browser automation agent for CopyCat. Be fast and direct.\n\n"
+    "Speed rules:\n"
+    "- Prefer a deep-link over UI search. Gmail keyword search is "
+    "https://mail.google.com/mail/u/0/#search/QUERY (URL-encode spaces).\n"
+    "- If the current page already matches the next step, do not navigate again.\n"
+    "- One snapshot after a page change is enough. Do not snapshot the full "
+    "Gmail inbox — go to the search URL first.\n"
+    "- Never use browser_find. Use browser_type / browser_click on refs from "
+    "the latest snapshot.\n"
+    "- Do not use browser_evaluate unless type/click already failed twice.\n"
+    "- Complete all sub-tasks in one session. Do not restart the browser.\n"
+    "- If a tool returns a permission error, stop retrying that exact action.\n"
+    "- ChatGPT / other chat UIs: type into the composer with submit=true, then "
+    "browser_wait_for the reply, then snapshot and read the assistant message.\n\n"
+    "Final reply (critical):\n"
+    "- Your last message MUST be the content the user asked for: the emails, "
+    "the ChatGPT summary, the message list — quoted or paraphrased in full.\n"
+    "- Never describe what you did. Do not write 'I searched', 'I provided', "
+    "or 'I successfully'.\n"
+    "- If ChatGPT fails, still return the facts you already read (sender, "
+    "subject, and what each email says).\n"
+    "- Use a short numbered list when there are multiple items.\n"
+    "- Also call set_clipboard with that same findings text so it is preserved."
 )
 
 
@@ -80,9 +91,17 @@ def _build_model(model_name: str | None = None):
             )
         return LiteLlm(model=resolved_name, api_key=api_key)
 
+    if resolved_name.startswith("groq/"):
+        api_key = get_groq_api_key()
+        if not api_key:
+            raise ValueError(
+                "MODEL_NAME points to Groq but GROQ_API_KEY is not set."
+            )
+        return LiteLlm(model=resolved_name, api_key=api_key)
+
     raise ValueError(
         f"Unsupported MODEL_NAME '{resolved_name}'. "
-        "Use gemini/..., anthropic/..., or openai/... with a matching API key."
+        "Use gemini/..., groq/..., anthropic/..., or openai/... with a matching API key."
     )
 
 
@@ -90,11 +109,13 @@ def build_browser_agent(
     *,
     model_name: str | None = None,
     allowed_tools: set[str] | None = None,
-) -> LlmAgent:
-    return LlmAgent(
+) -> tuple[LlmAgent, McpToolset]:
+    toolset = build_browser_toolset()
+    agent = LlmAgent(
         name="copycat_browser_executor",
         model=_build_model(model_name),
         instruction=INSTRUCTION,
-        tools=[build_browser_toolset(), set_clipboard],
+        tools=[toolset, set_clipboard],
         before_tool_callback=make_permission_gate(allowed_tools),
     )
+    return agent, toolset

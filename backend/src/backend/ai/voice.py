@@ -20,6 +20,9 @@ from dotenv import load_dotenv
 from google.genai import types
 
 from backend.ai.gemini_client import call_gemini
+from backend.ai.groq_client import transcribe_with_groq
+from backend.env_config import get_groq_api_key
+from backend.logging_setup import log
 
 load_dotenv()
 
@@ -34,6 +37,12 @@ _TTS_SAMPLE_RATE = 24000
 
 def transcribe_command(audio: bytes, mime_type: str) -> str:
     """Transcribe a spoken command. Returns the words spoken, nothing else."""
+
+    if get_groq_api_key():
+        try:
+            return transcribe_with_groq(audio, mime_type)
+        except Exception:
+            log.exception("Groq STT failed; falling back to Gemini")
 
     response = call_gemini(
         model=STT_MODEL,

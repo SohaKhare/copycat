@@ -305,7 +305,9 @@ export function TeachSuccess({ result }: { result: UploadVideoResponse }) {
     frames_extracted,
     saved_skills,
     privacy_filter_applied,
+    source,
   } = result;
+  const fromDescription = source === "voice" || source === "text";
   const [skills, setSkills] = useState<SavedSkill[]>(saved_skills);
 
   function updateSkill(updated: SavedSkill) {
@@ -323,16 +325,17 @@ export function TeachSuccess({ result }: { result: UploadVideoResponse }) {
           <IconCheck className="h-6 w-6" />
         </span>
         <p className="text-caption font-medium uppercase tracking-[0.18em] text-ink-muted">
-          Demonstration learned
+          {fromDescription ? "Described skill" : "Demonstration learned"}
         </p>
         <h2 className="font-heading text-h3 font-bold text-ink">
           {analysis.goal || "CopyCat understood your workflow"}
         </h2>
         <p className="max-w-xl text-small text-ink-secondary">
-          CopyCat watched your demonstration ({frames_extracted}{" "}
-          {frames_extracted === 1 ? "moment" : "moments"} examined) and broke it
-          down into the steps that make up the workflow. Review each skill below
-          — CopyCat can only run skills you accept.
+          {fromDescription
+            ? "CopyCat turned your description into a draft skill. Review the steps below — CopyCat can only run skills you accept."
+            : `CopyCat watched your demonstration (${frames_extracted} ${
+                frames_extracted === 1 ? "moment" : "moments"
+              } examined) and broke it down into the steps that make up the workflow. Review each skill below — CopyCat can only run skills you accept.`}
         </p>
         {privacy_filter_applied && (
           <p
@@ -361,9 +364,9 @@ export function TeachSuccess({ result }: { result: UploadVideoResponse }) {
         </div>
       ) : (
         <p className="rounded-md border border-line bg-surface p-4 text-small text-ink-secondary">
-          CopyCat couldn&rsquo;t identify a complete multi-step workflow in this
-          recording. Try re-recording the full workflow — including the
-          decisions in between — and teach it again.
+          CopyCat couldn&rsquo;t identify a complete multi-step workflow.
+          Try describing the full sequence — including the decisions in
+          between — or upload a recording.
         </p>
       )}
 

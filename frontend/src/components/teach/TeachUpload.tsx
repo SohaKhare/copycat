@@ -5,12 +5,15 @@ import { uploadVideo, ApiError } from "@/lib/api";
 import type { UploadVideoResponse } from "@/lib/api";
 import { getHidePersonalDetails } from "@/lib/privacy-settings";
 import { TeachSuccess } from "@/components/teach/TeachSuccess";
+import { TeachVoice } from "@/components/teach/TeachVoice";
 import {
   DefaultDropZone,
   SelectedFileView,
   UploadErrorView,
   UploadingView,
 } from "@/components/teach/TeachUploadViews";
+import { IconMic, IconVideo } from "@/components/ui/Icons";
+import { cn } from "@/lib/utils";
 
 /**
  * Teach flow state machine — FRONTEND_SPEC.md Phase 6.
@@ -23,6 +26,7 @@ import {
  * video/* and non-empty. No size limit is invented.
  */
 
+type TeachMode = "video" | "voice";
 type TeachPhase = "default" | "file-selected" | "uploading" | "success" | "error";
 
 function isVideoFile(file: File): boolean {
@@ -30,6 +34,7 @@ function isVideoFile(file: File): boolean {
 }
 
 export function TeachUpload() {
+  const [mode, setMode] = useState<TeachMode>("video");
   const [phase, setPhase] = useState<TeachPhase>("default");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,36 +121,81 @@ export function TeachUpload() {
     return <TeachSuccess result={result} />;
   }
 
-  if (phase === "error") {
-    return (
+  const showModeSwitch = phase === "default" || mode === "voice";
+
+  const body =
+    mode === "voice" ? (
+      <TeachVoice
+        onBack={() => setMode("video")}
+        onLearned={(learned) => {
+          setResult(learned);
+          setPhase("success");
+        }}
+      />
+    ) : phase === "error" ? (
       <UploadErrorView
         message={error ?? "Something went wrong while uploading."}
         fileName={file?.name ?? null}
         onRetrySame={handleUpload}
         onStartOver={resetToDefault}
       />
-    );
-  }
-
-  if (phase === "uploading" && file) {
-    return (
+    ) : phase === "uploading" && file ? (
       <UploadingView
         file={file}
         progress={progress}
         onCancel={handleCancelUpload}
       />
-    );
-  }
-
-  if (phase === "file-selected" && file) {
-    return (
+    ) : phase === "file-selected" && file ? (
       <SelectedFileView
         file={file}
         onRemove={resetToDefault}
         onUpload={handleUpload}
       />
+    ) : (
+      <DefaultDropZone error={error} onFileAccepted={handleFileAccepted} />
     );
-  }
 
-  return <DefaultDropZone error={error} onFileAccepted={handleFileAccepted} />;
+  return (
+    <div className="flex flex-col gap-4">
+      {showModeSwitch && (
+        <div
+          role="tablist"
+          aria-label="How to teach CopyCat"
+          className="grid grid-cols-2 gap-2 rounded-lg border border-line bg-surface p-1"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "video"}
+            onClick={() => setMode("video")}
+            className={cn(
+              "inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-small font-medium transition-colors duration-200",
+              mode === "video"
+                ? "bg-accent text-white"
+                : "text-ink-secondary hover:bg-beige hover:text-ink",
+            )}
+          >
+            <IconVideo className="h-4 w-4" />
+            Screen recording
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "voice"}
+            onClick={() => setMode("voice")}
+            className={cn(
+              "inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-small font-medium transition-colors duration-200",
+              mode === "voice"
+                ? "bg-accent text-white"
+                : "text-ink-secondary hover:bg-beige hover:text-ink",
+            )}
+          >
+            <IconMic className="h-4 w-4" />
+            Voice or text
+          </button>
+        </div>
+      )}
+      {body}
+    </div>
+  );
 }

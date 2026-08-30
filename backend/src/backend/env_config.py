@@ -16,6 +16,7 @@ DEFAULT_GEMINI_TEXT_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_GEMINI_BROWSER_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-5"
 DEFAULT_OPENAI_MODEL = "openai/gpt-4o"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 
 
 def ensure_env_loaded() -> None:
@@ -57,6 +58,19 @@ def get_openai_api_key() -> str:
     return clean_env(os.getenv("OPENAI_API_KEY"))
 
 
+def get_groq_api_key() -> str:
+    ensure_env_loaded()
+    return clean_env(os.getenv("GROQ_API_KEY"))
+
+
+def get_groq_chat_model() -> str:
+    ensure_env_loaded()
+    configured = clean_env(os.getenv("GROQ_MODEL"))
+    if configured:
+        return configured.removeprefix("groq/")
+    return DEFAULT_GROQ_MODEL
+
+
 def get_gemini_text_model() -> str:
     """
     Fast model for resolver/planner Gemini calls.
@@ -87,7 +101,8 @@ def get_gemini_browser_model() -> str:
 def resolve_browser_model_name() -> str:
     """
     Pick a browser executor model using only providers that have keys in .env.
-    Gemini is preferred when GEMINI_API_KEY(s) are set.
+    Groq is preferred when GROQ_API_KEY is set so Gemini outages do not block
+    the browser agent. Pin MODEL_NAME=gemini/... to force Gemini.
     """
 
     ensure_env_loaded()
@@ -95,6 +110,17 @@ def resolve_browser_model_name() -> str:
     gemini_keys = get_gemini_api_keys()
     anthropic_key = get_anthropic_api_key()
     openai_key = get_openai_api_key()
+    groq_key = get_groq_api_key()
+
+    if configured.startswith("groq/"):
+        if groq_key:
+            return configured
+        raise ValueError(
+            "MODEL_NAME points to Groq but GROQ_API_KEY is not set."
+        )
+
+    if groq_key and not configured.startswith("gemini/"):
+        return f"groq/{get_groq_chat_model()}"
 
     browser_model = clean_env(os.getenv("GEMINI_BROWSER_MODEL"))
     if browser_model and gemini_keys:
@@ -138,6 +164,8 @@ def resolve_browser_model_name() -> str:
 
     if gemini_keys:
         return f"gemini/{get_gemini_browser_model()}"
+    if groq_key:
+        return f"groq/{get_groq_chat_model()}"
     if anthropic_key:
         return DEFAULT_ANTHROPIC_MODEL
     if openai_key:
@@ -145,7 +173,7 @@ def resolve_browser_model_name() -> str:
 
     raise ValueError(
         "No AI provider keys found in backend/.env. "
-        "Set GEMINI_API_KEY (recommended), or ANTHROPIC_API_KEY / OPENAI_API_KEY."
+        "Set GEMINI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY."
     )
 
 

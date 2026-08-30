@@ -5,18 +5,17 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
 } from "react";
 import { useSearchParams } from "next/navigation";
+import { VoiceComposer } from "@/components/app/VoiceComposer";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { IconCheck, IconMic } from "@/components/ui/Icons";
-import { Input } from "@/components/ui/Input";
+import { IconCheck } from "@/components/ui/Icons";
 import { Markdown } from "@/components/ui/Markdown";
 import { cn } from "@/lib/utils";
-import { blobToWavBase64 } from "@/lib/audio";
 import { executeCommand, type ExecuteResponse } from "@/lib/api";
+import { useMicRecorder } from "@/lib/use-mic-recorder";
 
 /**
  * Voice interaction entry point.
@@ -159,13 +158,9 @@ export function VoiceCommand() {
   // Set by startRecording() when the browser lacks MediaRecorder or the mic
   // permission prompt is denied. No pre-mount probe, so SSR and the first
   // client render stay identical.
-  const [micUnavailable, setMicUnavailable] = useState(false);
-
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const { recording, micUnavailable, start, stop } = useMicRecorder();
 
-  const recording = state === "recording";
   const busy = state === "transcribing" || state === "running";
 
   const playAudio = useCallback((b64: string, mime: string | null) => {
@@ -220,92 +215,25 @@ export function VoiceCommand() {
     [playAudio],
   );
 
-  async function startRecording() {
-    if (micUnavailable) return;
-
-    if (
-      typeof window === "undefined" ||
-      !navigator.mediaDevices?.getUserMedia ||
-      !window.MediaRecorder
-    ) {
-      setMicUnavailable(true);
-      return;
-    }
-
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setMicUnavailable(true);
-      return;
-    }
-
-    let recorder: MediaRecorder;
-    try {
-      recorder = new MediaRecorder(stream);
-    } catch {
-      stream.getTracks().forEach((track) => track.stop());
-      setMicUnavailable(true);
-      return;
-    }
-    chunksRef.current = [];
-
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunksRef.current.push(event.data);
-    };
-
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop());
-
-      const mime = recorder.mimeType || "audio/webm";
-      const blob = new Blob(chunksRef.current, { type: mime });
-
-      if (blob.size === 0) {
-        setState("idle");
-        return;
-      }
-
-      setCaptured("Voice command");
-      setState("transcribing");
-
-      let audioB64: string;
-      try {
-        audioB64 = await blobToWavBase64(blob);
-      } catch {
-        setError("Couldn't process the recording. Try typing instead.");
-        setState("result");
-        return;
-      }
-
-      await run(
-        { audio_b64: audioB64, audio_format: "wav", modality: "voice" },
-        "Voice command",
-      );
-    };
-
-    recorderRef.current = recorder;
-    recorder.start();
-    setState("recording");
-  }
-
-  function stopRecording() {
-    recorderRef.current?.stop();
-    recorderRef.current = null;
-  }
-
   function toggleRecording() {
     if (recording) {
-      stopRecording();
-    } else {
-      void startRecording();
+      stop();
+      return;
     }
-  }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = command.trim();
-    if (!trimmed) return;
-    await run({ command: trimmed, modality: "text" }, trimmed);
+    void start(
+      async (audioB64) => {
+        setCaptured("Voice command");
+        await run(
+          { audio_b64: audioB64, audio_format: "wav", modality: "voice" },
+          "Voice command",
+        );
+      },
+      (message) => {
+        setError(message);
+        setState("result");
+      },
+    );
   }
 
   function reset() {
@@ -397,52 +325,16 @@ export function VoiceCommand() {
   }
 
   return (
-    <div className="flex flex-col items-center gap-6">
-      <button
-        type="button"
-        onClick={toggleRecording}
-        disabled={micUnavailable}
-        aria-label={recording ? "Stop recording" : "Start recording"}
-        aria-pressed={recording}
-        className={cn(
-          "flex h-28 w-28 items-center justify-center rounded-full bg-accent text-white transition-colors duration-200 hover:bg-accent-hover disabled:opacity-40",
-          recording && "animate-pulse-ring",
-        )}
-      >
-        <IconMic className="h-10 w-10" />
-      </button>
-
-      <div aria-live="polite" className="text-center">
-        <p className="font-medium text-ink">
-          {recording ? "Listening… tap to send" : "Tap to speak"}
-        </p>
-        <p className="mt-1 text-small text-ink-secondary">
-          {recording
-            ? "CopyCat will reply out loud"
-            : "or type your command below"}
-        </p>
-        {micUnavailable && (
-          <p className="mt-3 text-small text-info">
-            Microphone isn&rsquo;t available here — type your command instead.
-          </p>
-        )}
-      </div>
-
-      <form
-        onSubmit={handleSubmit}
-        className="flex w-full max-w-xl items-center gap-2"
-      >
-        <Input
-          value={command}
-          onChange={(event) => setCommand(event.target.value)}
-          placeholder="e.g. Organize my semester files by subject"
-          aria-label="Type a command for CopyCat"
-          disabled={busy || recording}
-        />
-        <Button type="submit" disabled={!command.trim() || busy || recording}>
-          Run
-        </Button>
-      </form>
-    </div>
+    <VoiceComposer
+      recording={recording}
+      micUnavailable={micUnavailable}
+      busy={busy}
+      text={command}
+      onTextChange={setCommand}
+      onToggleRecording={toggleRecording}
+      onSubmitText={(value) => {
+        void run({ command: value, modality: "text" }, value);
+      }}
+    />
   );
 }

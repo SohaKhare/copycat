@@ -64,7 +64,7 @@ export type SavedSkill = {
   created_at?: string;
 };
 
-/** Exact 200 response of POST /upload-video. */
+/** Exact 200 response of POST /upload-video, also used by POST /teach-skill. */
 export type UploadVideoResponse = {
   message: string;
   video_id: string;
@@ -74,6 +74,8 @@ export type UploadVideoResponse = {
   privacy_regions_redacted?: number;
   analysis: LearningAnalysis;
   saved_skills: SavedSkill[];
+  source?: "video" | "voice" | "text";
+  description?: string;
 };
 
 /** Mirrors backend.models.execution.SkillParameter. */
@@ -323,6 +325,18 @@ export function resolveSkill(command: string): Promise<ResolveSkillResponse> {
   return requestJson<ResolveSkillResponse>("/resolve-skill", {
     method: "POST",
     body: JSON.stringify({ command }),
+  });
+}
+
+export function teachSkill(input: ExecuteInput): Promise<UploadVideoResponse> {
+  const body =
+    typeof input === "string"
+      ? { command: input, modality: "text" as const }
+      : { modality: "text" as const, ...input };
+
+  return requestJson<UploadVideoResponse>("/teach-skill", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

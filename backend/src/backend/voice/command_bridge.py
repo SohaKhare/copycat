@@ -4,11 +4,13 @@ resolve -> plan -> execute -> log chain the POST /execute HTTP endpoint uses,
 so a voice-triggered request isn't a separate, ad-hoc execution path.
 """
 
+import time
 from dataclasses import dataclass
 
 from backend.ai.orchestrator import orchestrate_skills
 from backend.ai.skill_resolver import resolve_skills
 from backend.ai.user_reply import Modality, UserReply, build_user_reply
+from backend.logging_setup import log
 from backend.models.execution import (
     ExecutionPlan,
     ExecutionResult,
@@ -54,12 +56,21 @@ def run_command(
         )
         return _empty_result(reply)
 
+    pipeline_started = time.monotonic()
+
+    resolve_started = time.monotonic()
     resolution = resolve_skills(
         command=command,
         skills=accepted_skills,
     )
+    resolve_ms = (time.monotonic() - resolve_started) * 1000
 
     if resolution is None or not resolution.skills:
+        log.info(
+            "[copycat.pipeline] resolve finished in %.0fms (no match) total=%.0fms",
+            resolve_ms,
+            (time.monotonic() - pipeline_started) * 1000,
+        )
         reply = build_user_reply(
             command=command,
             modality=modality,
@@ -70,11 +81,25 @@ def run_command(
         skill["id"]: skill for skill in accepted_skills if skill.get("id")
     }
 
+    orchestrate_started = time.monotonic()
     orchestration = orchestrate_skills(
         command=command,
         resolution=resolution,
         modality=modality,
         skills_by_id=skills_by_id,
+    )
+    orchestrate_ms = (time.monotonic() - orchestrate_started) * 1000
+    total_ms = (time.monotonic() - pipeline_started) * 1000
+
+    environments = [item.environment for item in resolution.skills]
+    log.info(
+        "[copycat.pipeline] resolve=%.0fms orchestrate=%.0fms total=%.0fms "
+        "skills=%d envs=%s",
+        resolve_ms,
+        orchestrate_ms,
+        total_ms,
+        len(resolution.skills),
+        environments,
     )
 
     first_run = orchestration.runs[0] if orchestration.runs else None

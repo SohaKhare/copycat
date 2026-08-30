@@ -11,6 +11,8 @@ sensitive-action keywords and block them before they run.
 
 from typing import Any
 
+from backend.logging_setup import log
+
 ALWAYS_CONFIRM_KEYWORDS = (
     "delete",
     "remove",
@@ -37,6 +39,11 @@ def make_permission_gate(allowed_tools: set[str] | None = None):
         name = tool.name
 
         if allowed_tools is not None and name not in allowed_tools:
+            log.warning(
+                "[copycat.browser] blocked tool=%r reason=not_in_allowed_list args=%s",
+                name,
+                args,
+            )
             return {
                 "error": (
                     f"'{name}' is outside this skill's approved tool list "
@@ -45,11 +52,24 @@ def make_permission_gate(allowed_tools: set[str] | None = None):
                 )
             }
 
-        text_fields = [str(v) for v in args.values() if isinstance(v, str)]
-        haystack = (name + " " + " ".join(text_fields)).lower()
+        # Only scan the tool name and the human-facing target, not JS
+        # payloads — "send-button" in a ChatGPT evaluate was blocking
+        # the real submit and adding extra retries.
+        haystack_parts = [name]
+        for key in ("element", "target", "name"):
+            value = args.get(key)
+            if isinstance(value, str):
+                haystack_parts.append(value)
+        haystack = " ".join(haystack_parts).lower()
 
         for keyword in ALWAYS_CONFIRM_KEYWORDS:
             if keyword in haystack:
+                log.warning(
+                    "[copycat.browser] blocked tool=%r reason=keyword %r args=%s",
+                    name,
+                    keyword,
+                    args,
+                )
                 return {
                     "error": (
                         f"This action ('{name}' on "
@@ -60,6 +80,7 @@ def make_permission_gate(allowed_tools: set[str] | None = None):
                     )
                 }
 
+        log.info("[copycat.browser] allowing tool=%r args=%s", name, args)
         return None  # None = let the real tool call proceed
 
     return gate

@@ -18,7 +18,11 @@ from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 from mcp import StdioServerParameters
 
+from backend.logging_setup import log
+
 DEFAULT_PROFILE_DIR = os.path.expanduser("~/.cache/copycat-browser-profile")
+DEFAULT_MCP_VERSION = "0.0.79"
+DEFAULT_MCP_CONNECT_TIMEOUT = 60
 
 STEALTH_INIT_SCRIPT = str(Path(__file__).parent / "stealth_init.js")
 
@@ -30,6 +34,21 @@ REALISTIC_USER_AGENT = (
 )
 
 
+def _mcp_connect_timeout() -> float:
+    raw = os.environ.get("PLAYWRIGHT_MCP_CONNECT_TIMEOUT", "").strip()
+    if not raw:
+        return DEFAULT_MCP_CONNECT_TIMEOUT
+    try:
+        return float(raw)
+    except ValueError:
+        log.warning(
+            "invalid PLAYWRIGHT_MCP_CONNECT_TIMEOUT=%r; using %ss",
+            raw,
+            DEFAULT_MCP_CONNECT_TIMEOUT,
+        )
+        return DEFAULT_MCP_CONNECT_TIMEOUT
+
+
 def build_browser_toolset() -> McpToolset:
     cdp_endpoint = os.environ.get("BROWSER_CDP_ENDPOINT")
 
@@ -37,14 +56,18 @@ def build_browser_toolset() -> McpToolset:
     # runs in the background. Named for the outcome you want, not the
     # underlying flag, so it can't get read backwards before a demo.
     show_browser = os.environ.get("SHOW_BROWSER", "false").lower() == "true"
+    mcp_version = os.environ.get("PLAYWRIGHT_MCP_VERSION", DEFAULT_MCP_VERSION)
+    connect_timeout = _mcp_connect_timeout()
 
     args = [
-        "@playwright/mcp@latest",
+        "--yes",
+        f"@playwright/mcp@{mcp_version}",
         "--grant-permissions",
         "clipboard-read",
         "clipboard-write",
     ]
 
+    mode = "cdp" if cdp_endpoint else ("headed" if show_browser else "headless")
     if cdp_endpoint:
         args += [f"--cdp-endpoint={cdp_endpoint}"]
     else:
@@ -59,9 +82,33 @@ def build_browser_toolset() -> McpToolset:
             args += ["--user-agent", REALISTIC_USER_AGENT]
             args.append("--headless")
 
+    log.info(
+        "starting Playwright MCP: mode=%s version=%s connect_timeout=%ss cmd=npx %s",
+        mode,
+        mcp_version,
+        connect_timeout,
+        " ".join(args),
+    )
+
+    # Fewer tools = smaller Gemini schema + fewer wasted explore turns.
+    # Cache the list so get_tools() is not a second MCP round-trip.
     return McpToolset(
         connection_params=StdioConnectionParams(
             server_params=StdioServerParameters(command="npx", args=args),
-            timeout=60,
+            timeout=connect_timeout,
         ),
+        tool_filter=[
+            "browser_navigate",
+            "browser_navigate_back",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_fill_form",
+            "browser_press_key",
+            "browser_wait_for",
+            "browser_tabs",
+            "browser_select_option",
+            "browser_evaluate",
+        ],
+        tool_list_cache_ttl_seconds=3600,
     )

@@ -14,7 +14,7 @@ from backend.logging_setup import log
 from backend.voice.command_bridge import run_command
 from backend.voice.live_agent import VoiceSession
 
-from backend.ai.gemini import analyze_frames, test_gemini
+from backend.ai.gemini import analyze_description, analyze_frames, test_gemini
 from backend.ai.skill_resolver import resolve_skills
 from backend.ai.voice import (
     summarize_for_speech,
@@ -104,7 +104,9 @@ async def _log_unhandled_exception(request: Request, exc: Exception):
 
 @app.on_event("startup")
 async def startup_prewarm_browser() -> None:
-    if os.getenv("BROWSER_PREWARM", "").lower() == "true":
+    prewarm_enabled = os.getenv("BROWSER_PREWARM", "").lower() == "true"
+    log.info("browser prewarm=%s (set BROWSER_PREWARM=true to skip first MCP cold start)", prewarm_enabled)
+    if prewarm_enabled:
         await to_thread(prewarm_browser_session)
 
 
@@ -238,6 +240,117 @@ async def upload_video(
         "frames_extracted": len(frames),
         "privacy_filter_applied": privacy_result.applied,
         "privacy_regions_redacted": privacy_result.regions_redacted,
+        "analysis": analysis,
+        "saved_skills": saved_skills,
+    }
+
+
+def _persist_candidate_skills(analysis) -> list:
+    saved_skills = []
+    for candidate_skill in analysis.candidate_skills:
+        skill = Skill(
+            name=candidate_skill.name,
+            description=candidate_skill.description,
+            steps=[step.model_dump() for step in candidate_skill.steps],
+            environment=candidate_skill.environment,
+            confidence=candidate_skill.confidence,
+            status="pending",
+            tested=False,
+        )
+        saved_skills.append(create_skill(skill))
+    return saved_skills
+
+
+@app.post("/teach-skill")
+def teach_skill_from_description(request: ExecuteRequest):
+    """Create a pending skill from a spoken or typed workflow description."""
+
+    if request.audio_b64:
+        try:
+            audio = base64.b64decode(request.audio_b64)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail="audio_b64 is not valid base64.",
+            )
+        try:
+            description = transcribe_command(
+                audio,
+                f"audio/{request.audio_format}",
+            )
+        except ClientError as error:
+            if error.code == 429:
+                log.warning("/teach-skill transcription: quota/rate limit hit")
+                raise HTTPException(status_code=429, detail=_QUOTA_MESSAGE)
+            log.exception("/teach-skill transcription: client error")
+            raise HTTPException(
+                status_code=400,
+                detail="Could not transcribe the audio.",
+            )
+        except ServerError:
+            log.error("/teach-skill transcription: Gemini unavailable", exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Gemini is temporarily unavailable. "
+                    "Please try again later."
+                ),
+            )
+        except Exception:
+            log.exception("/teach-skill transcription failed")
+            raise HTTPException(
+                status_code=400,
+                detail="Could not transcribe the audio.",
+            )
+    else:
+        description = request.command
+
+    if not description or not description.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Could not make out a workflow description.",
+        )
+
+    description = description.strip()
+    log.info("/teach-skill [%s] description=%r", request.modality, description)
+
+    try:
+        analysis = analyze_description(description)
+        saved_skills = _persist_candidate_skills(analysis)
+    except ValueError as error:
+        log.warning("/teach-skill rejected: %s", error)
+        raise HTTPException(status_code=400, detail=str(error))
+    except ServerError:
+        log.error("/teach-skill: Gemini unavailable", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Gemini is temporarily unavailable. "
+                "Please try again later."
+            ),
+        )
+    except Exception:
+        log.exception("/teach-skill crashed for description=%r", description)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not turn that description into a skill - see log.txt.",
+        )
+
+    log.info(
+        "/teach-skill OK -> %d candidate skill(s) from %s",
+        len(saved_skills),
+        request.modality,
+    )
+
+    return {
+        "message": "Workflow description turned into a candidate skill.",
+        "video_id": "",
+        "original_filename": None,
+        "frames_extracted": 0,
+        "source": "voice" if request.modality == "voice" else "text",
+        "description": description,
+        "privacy_filter_applied": False,
+        "privacy_regions_redacted": 0,
         "analysis": analysis,
         "saved_skills": saved_skills,
     }

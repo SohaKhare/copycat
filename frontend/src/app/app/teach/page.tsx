@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 
 const GUIDANCE_STEPS = [
   "Start with the task already prepared.",
-  "Perform the complete workflow naturally.",
+  "Show it in a recording, or describe the steps out loud.",
   "Include important decisions and steps.",
   "Avoid unnecessary unrelated actions.",
 ];
@@ -36,7 +36,7 @@ export default function TeachPage() {
     <>
       <PageHeader
         title="Teach CopyCat"
-        description="Show CopyCat how you complete a task by uploading a screen recording."
+        description="Show CopyCat a workflow with a screen recording, or describe it by voice or text."
       />
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">

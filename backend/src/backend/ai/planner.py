@@ -226,7 +226,10 @@ def _build_browser_plan(
         "Combine the demonstrated steps above with the current request - "
         "the request can add exceptions or narrow the skill, but don't "
         "ignore the base workflow. Use the browser tools to actually "
-        "perform this, don't just describe it."
+        "perform this, don't just describe it.\n"
+        "If this is Gmail search, navigate straight to "
+        "https://mail.google.com/mail/u/0/#search/QUERY and snapshot "
+        "the results. Do not open the inbox first."
     )
 
     goal = "\n\n".join(goal_parts)
@@ -300,7 +303,10 @@ def build_compound_browser_plan(
         + "\n".join(subtask_lines)
         + f'\n\nOverall user command: "{command}"\n\n'
         "Complete every sub-task above in order using browser tools. "
-        "When finished, give a short summary with one line per sub-task."
+        "For Gmail search, go directly to "
+        "https://mail.google.com/mail/u/0/#search/QUERY. "
+        "When finished, reply with the actual findings (email contents, "
+        "ChatGPT summary text, message list) — not a recap of the steps."
     )
 
     return ExecutionPlan(
