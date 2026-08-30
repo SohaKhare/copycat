@@ -1,0 +1,169 @@
+@import "tailwindcss";
+
+/*
+ * CopyCat design tokens — defined in DESIGN.md.
+ *
+ * Warm editorial system:
+ *   CREAM + NEAR-BLACK + DEEP BURGUNDY + GENEROUS WHITESPACE
+ *
+ * All UI must consume these tokens instead of hard-coded values.
+ */
+
+@theme inline {
+  /* Color system (DESIGN.md §2–7) */
+  --color-cream: #f4f0e8; /* main background */
+  --color-beige: #eae4d9; /* alternate background / sidebar */
+  --color-surface: #faf8f3; /* cards, forms, inputs, elevated content */
+  --color-ink: #1c1b19; /* warm near-black: primary text + dark sections */
+  --color-ink-secondary: #625e57; /* supporting descriptions */
+  --color-ink-muted: #918b82; /* metadata, captions */
+  --color-line: #d6cfc2; /* default 1px borders */
+  --color-accent: #7d1f2a; /* deep burgundy: primary actions */
+  --color-accent-hover: #5f1720; /* primary button hover / active */
+  --color-accent-soft: #e7d1d3; /* subtle highlights, selected backgrounds */
+  --color-success: #4f6b52;
+  --color-warning: #a66a2c;
+  --color-error: #9e3131;
+  --color-info: #526a7a;
+
+  /* Fonts (DESIGN.md §8) — variables provided by next/font in layout.tsx */
+  --font-heading: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  /* Type scale (DESIGN.md §9, hero reduced per user feedback —
+     was clamp(4rem, 9vw, 8rem) which rendered up to 128px) */
+  --text-hero: clamp(3rem, 6vw, 5.5rem); /* 48px → 88px */
+  --text-hero--line-height: 1.02;
+  --text-hero--letter-spacing: -0.02em;
+
+  --text-display: 3.5rem; /* H1 — 56px */
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.02em;
+
+  --text-h2: 2.625rem; /* 42px */
+  --text-h2--line-height: 1.1;
+  --text-h2--letter-spacing: -0.015em;
+
+  --text-h3: 1.75rem; /* 28px */
+  --text-h3--line-height: 1.25;
+
+  --text-body-lg: 1.25rem; /* large body — 20px */
+  --text-body-lg--line-height: 1.6;
+
+  --text-small: 0.875rem; /* 14px */
+  --text-small--line-height: 1.5;
+
+  --text-caption: 0.75rem; /* 12px */
+  --text-caption--line-height: 1.4;
+
+  /* Border radius (DESIGN.md §12) */
+  --radius-sm: 6px; /* small components */
+  --radius-md: 8px; /* inputs, buttons */
+  --radius-lg: 12px; /* cards */
+  --radius-xl: 16px; /* large containers */
+
+  /* Shadows (DESIGN.md §13) */
+  --shadow-soft: 0 8px 30px rgba(28, 27, 25, 0.08);
+}
+
+/* Base styles */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: #f4f0e8;
+  color: #1c1b19;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+h1,
+h2 {
+  text-wrap: balance;
+}
+
+::selection {
+  background-color: #e7d1d3;
+  color: #1c1b19;
+}
+
+:focus-visible {
+  outline: 2px solid #7d1f2a;
+  outline-offset: 2px;
+}
+
+/* Hero entrance (Phase 4) — short fade/rise, staggered with
+   [animation-delay:*] utilities. Automatically neutralized by the
+   prefers-reduced-motion guard at the bottom of this file. */
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-rise {
+  animation: fade-rise 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Mic listening state (Phase 5) — a soft expanding ring around the
+   microphone button. Communicates activity without motion elsewhere;
+   neutralized by the prefers-reduced-motion guard at the bottom. */
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(125, 31, 42, 0.3);
+  }
+  70% {
+    box-shadow: 0 0 0 18px rgba(125, 31, 42, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(125, 31, 42, 0);
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+
+/* Upload progress without real data (Phase 6) — a short bar sliding across
+   the track. Only shown when the browser can't report upload progress;
+   neutralized by the prefers-reduced-motion guard at the bottom. */
+@keyframes indeterminate-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.animate-indeterminate-slide {
+  animation: indeterminate-slide 1.4s ease-in-out infinite;
+}
+
+/* Motion (DESIGN.md §26–27) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
