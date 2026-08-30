@@ -6,33 +6,20 @@ following a rigid pre-scripted plan, since DOM structure and element refs
 aren't known until the page actually loads.
 """
 
-import os
-
-from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.models.lite_llm import LiteLlm
 from google.genai import types
 
+from backend.env_config import (
+    get_anthropic_api_key,
+    get_gemini_api_keys,
+    get_openai_api_key,
+    resolve_browser_model_name,
+)
 from backend.executors.browser_permission import make_permission_gate
 from backend.executors.browser_tools import build_browser_toolset
 from backend.executors.clipboard_tool import set_clipboard
-
-load_dotenv()
-
-# LiteLLM's Anthropic provider looks specifically for an env var literally
-# named ANTHROPIC_API_KEY to auto-authenticate - it won't pick up a generic
-# API_KEY. Bridge it here so this project can still keep a single key in
-# .env instead of duplicating it under two names.
-if os.getenv("API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
-    os.environ["ANTHROPIC_API_KEY"] = os.environ["API_KEY"]
-
-# Model is configurable via MODEL_NAME in .env, e.g. "anthropic/claude-sonnet-4-5"
-# or "gemini/gemini-3.1-flash-lite". Gemini models route through ADK's native
-# Gemini class instead of LiteLLM - it's what ADK itself recommends over
-# LiteLLM for Gemini, and it's the only path that gets our retry/backoff for
-# transient 429/503s. Everything else (Anthropic, etc.) goes through LiteLLM.
-MODEL_NAME = os.getenv("MODEL_NAME", "anthropic/claude-sonnet-4-5")
 
 GEMINI_RETRY_OPTIONS = types.HttpRetryOptions(
     attempts=6,
@@ -43,41 +30,65 @@ GEMINI_RETRY_OPTIONS = types.HttpRetryOptions(
     http_status_codes=[429, 500, 502, 503, 504],
 )
 
+INSTRUCTION = (
+    "You are a browser automation agent for CopyCat. You have Playwright "
+    "browser tools: browser_navigate, browser_snapshot, browser_click, "
+    "browser_type, browser_wait_for, and others.\n\n"
+    "Rules:\n"
+    "- Complete all sub-tasks in one session without restarting the browser.\n"
+    "- Minimize snapshots — only call browser_snapshot when you need element "
+    "refs before a click or type.\n"
+    "- Work step by step. Do not repeat navigation already done for prior "
+    "sub-tasks.\n"
+    "- If a tool returns a permission error, stop retrying it and report it.\n"
+    "- To copy text: read it from browser_snapshot and call set_clipboard; "
+    "do not use site copy buttons.\n"
+    "- When finished, give one short summary (one line per sub-task if "
+    "multiple)."
+)
 
-def _build_model(model_name: str):
-    if model_name.startswith("gemini/"):
-        bare_model_name = model_name.removeprefix("gemini/")
-        api_key = os.environ.get("GEMINI_API_KEY")
+
+def _build_model(model_name: str | None = None):
+    resolved_name = model_name or resolve_browser_model_name()
+
+    if resolved_name.startswith("gemini/"):
+        bare_model_name = resolved_name.removeprefix("gemini/")
+        keys = get_gemini_api_keys()
+        if not keys:
+            raise ValueError(
+                "Browser executor requires GEMINI_API_KEY but none is configured."
+            )
         return Gemini(
             model=bare_model_name,
-            client_kwargs={"api_key": api_key} if api_key else {},
+            client_kwargs={"api_key": keys[0]},
             retry_options=GEMINI_RETRY_OPTIONS,
         )
 
-    return LiteLlm(model=model_name)
+    if resolved_name.startswith("anthropic/"):
+        api_key = get_anthropic_api_key()
+        if not api_key:
+            raise ValueError(
+                "MODEL_NAME points to Anthropic but ANTHROPIC_API_KEY is not set."
+            )
+        return LiteLlm(model=resolved_name, api_key=api_key)
 
-INSTRUCTION = (
-    "You are a browser automation agent for CopyCat. You have Playwright "
-    "browser tools available: browser_navigate, browser_snapshot, "
-    "browser_click, browser_type, browser_wait_for, and others. Always call "
-    "browser_snapshot after navigating or after an action that changes the "
-    "page, before trying to click/type anything - it gives you the current "
-    "element refs. Work step by step. If a tool call comes back with an "
-    "'error' about missing permission, stop trying that action and report "
-    "it plainly in your final answer instead of retrying it.\n\n"
-    "If a step says to 'copy' something (a response, a value, any text), do "
-    "NOT click the site's own copy button - it doesn't reliably reach the "
-    "real clipboard when running headless. Instead, read the exact text "
-    "from the page (via browser_snapshot) and call the set_clipboard tool "
-    "with that exact text. That's the only way copying actually works.\n\n"
-    "When the task is complete, give one short, clear final summary of "
-    "what you did."
-)
+    if resolved_name.startswith("openai/") or resolved_name.startswith("gpt-"):
+        api_key = get_openai_api_key()
+        if not api_key:
+            raise ValueError(
+                "MODEL_NAME points to OpenAI but OPENAI_API_KEY is not set."
+            )
+        return LiteLlm(model=resolved_name, api_key=api_key)
+
+    raise ValueError(
+        f"Unsupported MODEL_NAME '{resolved_name}'. "
+        "Use gemini/..., anthropic/..., or openai/... with a matching API key."
+    )
 
 
 def build_browser_agent(
     *,
-    model_name: str = MODEL_NAME,
+    model_name: str | None = None,
     allowed_tools: set[str] | None = None,
 ) -> LlmAgent:
     return LlmAgent(

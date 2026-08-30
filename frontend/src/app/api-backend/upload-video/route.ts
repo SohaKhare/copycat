@@ -11,29 +11,25 @@
  * including FastAPI's { detail } errors (see src/lib/api.ts).
  */
 
-const BACKEND_ORIGIN =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { fetchBackend } from "@/lib/backend-fetch";
 
 export const runtime = "nodejs";
+export const maxDuration = 1800;
 
 export async function POST(request: Request): Promise<Response> {
   const contentType = request.headers.get("content-type");
 
   const init = {
     method: "POST",
-    // The multipart boundary lives in the content-type header — it must be
-    // forwarded verbatim or the backend cannot parse the form fields.
     headers: contentType ? { "content-type": contentType } : undefined,
     body: request.body,
-    // Required when forwarding a ReadableStream as a request body.
     duplex: "half",
-    // If the browser upload is cancelled, abort the upstream request too.
     signal: request.signal,
   } as unknown as RequestInit;
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${BACKEND_ORIGIN}/upload-video`, init);
+    upstream = await fetchBackend("/upload-video", init);
   } catch {
     return Response.json(
       { detail: "CopyCat couldn't reach the backend server." },

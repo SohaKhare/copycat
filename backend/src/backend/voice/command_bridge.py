@@ -4,17 +4,40 @@ resolve -> plan -> execute -> log chain the POST /execute HTTP endpoint uses,
 so a voice-triggered request isn't a separate, ad-hoc execution path.
 """
 
-from backend.ai.planner import create_execution_plan
-from backend.ai.skill_resolver import resolve_skill
-from backend.executors.router import execute_plan
-from backend.storage.execution_history import save_execution
-from backend.storage.skills import get_accepted_skills, get_skill
+from dataclasses import dataclass
+
+from backend.ai.orchestrator import orchestrate_skills
+from backend.ai.skill_resolver import resolve_skills
+from backend.ai.user_reply import Modality, UserReply, build_user_reply
+from backend.models.execution import (
+    ExecutionPlan,
+    ExecutionResult,
+    ResolvedSkill,
+    ResolvedSkillItem,
+    SkillRunResult,
+)
+from backend.storage.skills import get_accepted_skills
 
 
-def run_command(command: str) -> str:
+@dataclass
+class CommandPipelineResult:
+    resolved_skills: list[ResolvedSkillItem]
+    reasoning: str
+    skill_runs: list[SkillRunResult]
+    resolved_skill: ResolvedSkill | None
+    execution_plan: ExecutionPlan | None
+    execution_result: ExecutionResult | None
+    execution_history: dict | None
+    reply: UserReply
+    stopped_at_order: int | None = None
+
+
+def run_command(
+    command: str,
+    modality: Modality = "voice",
+) -> CommandPipelineResult:
     """
-    Runs `command` through the same pipeline as POST /execute, and returns a
-    short spoken-style summary of the outcome.
+    Runs `command` through the same pipeline as POST /execute.
 
     Blocking/synchronous - the browser executor spins up its own event loop
     internally, so call this via asyncio.to_thread from async contexts
@@ -24,40 +47,66 @@ def run_command(command: str) -> str:
     accepted_skills = get_accepted_skills()
 
     if not accepted_skills:
-        return (
-            "You haven't taught me anything yet - "
-            "there are no accepted skills."
+        reply = build_user_reply(
+            command=command,
+            modality=modality,
+            no_skills=True,
         )
+        return _empty_result(reply)
 
-    resolved_skill = resolve_skill(
+    resolution = resolve_skills(
         command=command,
         skills=accepted_skills,
     )
 
-    if resolved_skill is None:
-        return "I don't have a skill that matches that request yet."
+    if resolution is None or not resolution.skills:
+        reply = build_user_reply(
+            command=command,
+            modality=modality,
+        )
+        return _empty_result(reply)
 
-    skill = get_skill(resolved_skill.skill_id)
+    skills_by_id = {
+        skill["id"]: skill for skill in accepted_skills if skill.get("id")
+    }
 
-    if skill is None:
-        return "I found a matching skill, but couldn't load its details."
-
-    execution_plan = create_execution_plan(
+    orchestration = orchestrate_skills(
         command=command,
-        skill=skill,
+        resolution=resolution,
+        modality=modality,
+        skills_by_id=skills_by_id,
+    )
+
+    first_run = orchestration.runs[0] if orchestration.runs else None
+    last_run = orchestration.runs[-1] if orchestration.runs else None
+
+    resolved_skill = (
+        resolution.skills[0].to_resolved_skill(reasoning=resolution.reasoning)
+        if resolution.skills
+        else None
+    )
+
+    return CommandPipelineResult(
+        resolved_skills=resolution.skills,
+        reasoning=resolution.reasoning,
+        skill_runs=orchestration.runs,
         resolved_skill=resolved_skill,
+        execution_plan=first_run.execution_plan if first_run else None,
+        execution_result=last_run.execution_result if last_run else None,
+        execution_history=last_run.execution_history if last_run else None,
+        reply=orchestration.reply,
+        stopped_at_order=orchestration.stopped_at_order,
     )
 
-    execution_result = execute_plan(execution_plan)
 
-    save_execution(
-        command=command,
-        skill_id=resolved_skill.skill_id,
-        skill_name=resolved_skill.skill_name,
-        environment=resolved_skill.environment,
-        success=execution_result.success,
-        execution_plan=execution_plan.model_dump(),
-        execution_result=execution_result.model_dump(),
+def _empty_result(reply: UserReply) -> CommandPipelineResult:
+    return CommandPipelineResult(
+        resolved_skills=[],
+        reasoning="",
+        skill_runs=[],
+        resolved_skill=None,
+        execution_plan=None,
+        execution_result=None,
+        execution_history=None,
+        reply=reply,
     )
-
-    return execution_result.message

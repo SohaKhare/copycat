@@ -19,7 +19,9 @@ const API_PROXY_PREFIX = "/api-backend";
 const DIRECT_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 function apiUrl(path: string): string {
-  return DIRECT_API_URL ? `${DIRECT_API_URL}${path}` : `${API_PROXY_PREFIX}${path}`;
+  return DIRECT_API_URL
+    ? `${DIRECT_API_URL}${path}`
+    : `${API_PROXY_PREFIX}${path}`;
 }
 
 /** Mirrors backend.models.learning.CandidateSkillStep. */
@@ -88,6 +90,29 @@ export type ResolvedSkill = {
   reasoning: string;
 };
 
+/** One skill in a multi-skill resolution. */
+export type ResolvedSkillItem = {
+  skill_id: string;
+  skill_name: string;
+  environment: string;
+  parameters: SkillParameter[];
+  order: number;
+  match_confidence: string;
+};
+
+/** Result of running one skill in a composition. */
+export type SkillRunResult = {
+  order: number;
+  skill_id: string;
+  skill_name: string;
+  environment: string;
+  success: boolean;
+  message: string;
+  execution_plan: ExecutionPlan;
+  execution_result: ExecutionResult;
+  execution_history?: Record<string, unknown> | null;
+};
+
 /** Mirrors backend.models.execution.ExecutionResult. */
 export type ExecutionResult = {
   success: boolean;
@@ -133,6 +158,15 @@ export type ResolveSkillResponse = {
   message: string;
   command: string;
   resolved_skill: ResolvedSkill | null;
+  resolved_skills: ResolvedSkillItem[];
+  reasoning: string;
+};
+
+/** User-facing reply from POST /execute (Phase 1). */
+export type UserReply = {
+  text: string;
+  speakable: string;
+  modality: "text" | "voice";
 };
 
 /** Response of POST /execute. */
@@ -140,6 +174,9 @@ export type ExecuteResponse = {
   message: string;
   command: string;
   resolved_skill: ResolvedSkill | null;
+  resolved_skills: ResolvedSkillItem[];
+  reasoning: string;
+  skill_runs: SkillRunResult[];
   execution_plan: ExecutionPlan | null;
   execution_result: ExecutionResult | null;
   execution_history?: Record<string, unknown> | null;
@@ -210,13 +247,21 @@ async function requestJson<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(apiUrl(path), {
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-    ...options,
-  });
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(path), {
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+      ...options,
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      "CopyCat couldn't reach the server. Make sure the backend is running, then try again.",
+    );
+  }
 
   let body: unknown = null;
   try {
@@ -233,7 +278,10 @@ async function requestJson<T>(
           "CopyCat's analysis engine is temporarily unavailable. Please try again shortly.",
       );
     }
-    throw new ApiError(response.status, messageFromErrorBody(body, response.status));
+    throw new ApiError(
+      response.status,
+      messageFromErrorBody(body, response.status),
+    );
   }
 
   return body as T;

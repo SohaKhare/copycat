@@ -8,6 +8,8 @@ from backend.models.execution import (
     ExecutionPlan,
     ExecutionPlanStep,
     ResolvedSkill,
+    ResolvedSkillItem,
+    SkillParameter,
 )
 
 
@@ -246,6 +248,117 @@ def _build_browser_plan(
         goal=goal,
         parameters=resolved_skill.parameters,
         steps=plan_steps,
+    )
+
+
+def build_compound_browser_plan(
+    *,
+    command: str,
+    items: list[ResolvedSkillItem],
+    skills_by_id: dict[str, dict],
+) -> ExecutionPlan:
+    """
+    One browser goal for multiple sequential browser skills — single ADK session.
+    """
+
+    ordered_items = sorted(items, key=lambda item: item.order)
+    subtask_lines: list[str] = []
+    all_parameters: list[SkillParameter] = []
+    all_steps: list[ExecutionPlanStep] = []
+    step_offset = 0
+
+    for index, item in enumerate(ordered_items, start=1):
+        skill = skills_by_id[item.skill_id]
+        parameter_lines = [
+            f"{parameter.name}={parameter.value}" for parameter in item.parameters
+        ]
+        subtask_lines.append(
+            f"Sub-task {index} — {item.skill_name}: "
+            f"{skill.get('description') or 'No description'}"
+            + (f" ({', '.join(parameter_lines)})" if parameter_lines else "")
+        )
+        all_parameters.extend(item.parameters)
+
+        for step in skill.get("steps") or []:
+            step_offset += 1
+            all_steps.append(
+                ExecutionPlanStep(
+                    step_number=step_offset,
+                    action=step.get("action", "demonstrated_step"),
+                    description=(
+                        f"[{item.skill_name}] "
+                        f"{step.get('description') or step.get('action', '')}"
+                    ),
+                    parameters=step.get("observed_data") or {},
+                )
+            )
+
+    combined_name = " -> ".join(item.skill_name for item in ordered_items)
+    goal = (
+        "Run these browser sub-tasks in order in ONE session. "
+        "Do not restart the browser between sub-tasks.\n\n"
+        + "\n".join(subtask_lines)
+        + f'\n\nOverall user command: "{command}"\n\n'
+        "Complete every sub-task above in order using browser tools. "
+        "When finished, give a short summary with one line per sub-task."
+    )
+
+    return ExecutionPlan(
+        skill_id=ordered_items[0].skill_id,
+        skill_name=combined_name,
+        environment="browser",
+        goal=goal,
+        parameters=all_parameters,
+        steps=all_steps,
+    )
+
+
+def build_browser_subtask_plan(
+    *,
+    command: str,
+    item: ResolvedSkillItem,
+    skill: dict,
+    continuation: bool = False,
+) -> ExecutionPlan:
+    """Lightweight per-skill plan for audit trails on merged browser runs."""
+
+    resolved = item.to_resolved_skill()
+    if not continuation:
+        return _build_browser_plan(
+            command=command,
+            skill=skill,
+            resolved_skill=resolved,
+        )
+
+    parameter_lines = [
+        f"- {parameter.name}: {parameter.value}" for parameter in item.parameters
+    ]
+    goal_parts = [
+        "Continue in the same browser session.",
+        f"Sub-task: {item.skill_name} — {skill.get('description') or ''}",
+    ]
+    if parameter_lines:
+        goal_parts.append("Parameters:\n" + "\n".join(parameter_lines))
+    goal_parts.append(
+        f'User command context: "{command}"\n'
+        "Perform this sub-task now using browser tools."
+    )
+
+    return ExecutionPlan(
+        skill_id=item.skill_id,
+        skill_name=item.skill_name,
+        environment=item.environment,
+        goal="\n\n".join(goal_parts),
+        parameters=item.parameters,
+        steps=[
+            ExecutionPlanStep(
+                step_number=step.get("step_number", index + 1),
+                action=step.get("action", "demonstrated_step"),
+                description=step.get("description", ""),
+                parameters=step.get("observed_data") or {},
+            )
+            for index, step in enumerate(skill.get("steps") or [])
+        ],
     )
 
 

@@ -99,3 +99,9 @@ def call_gemini(*, model: str, contents, config=None):
 
     assert last_error is not None
     raise last_error
+
+
+def create_gemini_client() -> genai.Client:
+    """Return a Gemini client using the primary configured API key."""
+
+    return genai.Client(api_key=get_gemini_keys()[0])

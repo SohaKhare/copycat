@@ -1,18 +1,21 @@
 import asyncio
 import base64
+import os
 from asyncio import to_thread
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from google.genai.errors import ClientError, ServerError
 
 from backend.logging_setup import log
+from backend.voice.command_bridge import run_command
 from backend.voice.live_agent import VoiceSession
 
 from backend.ai.gemini import analyze_frames, test_gemini
-from backend.ai.skill_resolver import resolve_skill
+from backend.ai.skill_resolver import resolve_skills
 from backend.ai.voice import (
     summarize_for_speech,
     synthesize_speech,
@@ -32,23 +35,29 @@ from backend.storage.skills import (
 )
 
 from backend.video.processor import extract_frames
-from backend.ai.planner import create_execution_plan
-
-from backend.executors.router import (
-    execute_plan,
-)
 
 from backend.storage.execution_history import (
     get_execution,
     get_execution_history,
-    save_execution,
 )
+from backend.executors.browser import prewarm_browser_session
 
 
 app = FastAPI(
     title="CopyCat API",
     description="Teach AI by showing.",
     version="0.3.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -66,8 +75,6 @@ log.info("CopyCat API starting up")
 
 @app.exception_handler(HTTPException)
 async def _log_http_exception(request: Request, exc: HTTPException):
-    # 4xx are expected (bad input, no match); log them at a lower level so the
-    # file still shows what the client hit, without looking like a crash.
     level = log.warning if exc.status_code < 500 else log.error
     level(
         "%s %s -> %s: %s",
@@ -94,6 +101,12 @@ async def _log_unhandled_exception(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal server error - see log.txt."},
     )
+
+
+@app.on_event("startup")
+async def startup_prewarm_browser() -> None:
+    if os.getenv("BROWSER_PREWARM", "").lower() == "true":
+        await to_thread(prewarm_browser_session)
 
 
 @app.get("/")
@@ -136,10 +149,6 @@ async def upload_video(file: UploadFile = File(...)):
     log.info("/upload-video %s (%s bytes)", file.filename, len(contents))
 
     try:
-        # extract_frames decodes every frame and analyze_frames calls the
-        # Gemini API (with SDK retries), which can take minutes on a long
-        # recording. Running them on threads keeps the event loop responsive
-        # so concurrent requests (health checks, retries) are still served.
         frames = await to_thread(
             extract_frames,
             video_path=file_path,
@@ -363,8 +372,14 @@ def resolve_user_skill(
             detail="No accepted skills found.",
         )
 
+    if not request.command:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a text command for skill resolution.",
+        )
+
     try:
-        resolved_skill = resolve_skill(
+        resolution = resolve_skills(
             command=request.command,
             skills=accepted_skills,
         )
@@ -384,18 +399,27 @@ def resolve_user_skill(
             ),
         )
 
-    if resolved_skill is None:
+    if resolution is None or not resolution.skills:
         return {
             "message": "No matching learned skill found.",
             "command": request.command,
             "resolved_skill": None,
+            "resolved_skills": [],
+            "reasoning": "",
         }
+
+    first_skill = resolution.skills[0].to_resolved_skill(
+        reasoning=resolution.reasoning
+    )
 
     return {
         "message": "Matching skill found successfully.",
         "command": request.command,
-        "resolved_skill": resolved_skill,
+        "resolved_skill": first_skill,
+        "resolved_skills": resolution.skills,
+        "reasoning": resolution.reasoning,
     }
+
 
 _QUOTA_MESSAGE = (
     "Gemini's rate limit / free-tier quota is exhausted right now. "
@@ -403,7 +427,11 @@ _QUOTA_MESSAGE = (
 )
 
 
-def _voice_fields(text: str, modality: str) -> dict:
+def _voice_fields(
+    text: str,
+    modality: str,
+    speakable: str | None = None,
+) -> dict:
     """
     Build the text/speakable/audio part of an /execute reply.
 
@@ -421,12 +449,12 @@ def _voice_fields(text: str, modality: str) -> dict:
         }
 
     try:
-        speakable = summarize_for_speech(text)
-        wav_bytes, audio_mime = synthesize_speech(speakable)
+        speakable_text = speakable or summarize_for_speech(text)
+        wav_bytes, audio_mime = synthesize_speech(speakable_text)
 
         return {
             "text": text,
-            "speakable": speakable,
+            "speakable": speakable_text,
             "modality": modality,
             "audio_b64": base64.b64encode(wav_bytes).decode(),
             "audio_mime": audio_mime,
@@ -436,7 +464,7 @@ def _voice_fields(text: str, modality: str) -> dict:
         log.exception("voice reply (speakable/TTS) failed; returning text only")
         return {
             "text": text,
-            "speakable": text[:200],
+            "speakable": (speakable or text)[:200],
             "modality": modality,
             "audio_b64": None,
             "audio_mime": None,
@@ -483,7 +511,10 @@ def execute_user_command(
                 ),
             )
         except Exception:
-            log.exception("/execute transcription failed (audio_format=%s)", request.audio_format)
+            log.exception(
+                "/execute transcription failed (audio_format=%s)",
+                request.audio_format,
+            )
             raise HTTPException(
                 status_code=400,
                 detail="Could not transcribe the audio.",
@@ -499,64 +530,18 @@ def execute_user_command(
 
     log.info("/execute [%s] command=%r", request.modality, command)
 
-    accepted_skills = (
-        get_accepted_skills()
-    )
+    accepted_skills = get_accepted_skills()
 
     if not accepted_skills:
         raise HTTPException(
             status_code=404,
-            detail=(
-                "No accepted skills found."
-            ),
+            detail="No accepted skills found.",
         )
 
     try:
-        resolved_skill = resolve_skill(
+        pipeline_result = run_command(
             command=command,
-            skills=accepted_skills,
-        )
-
-        if resolved_skill is None:
-            log.warning("/execute NO MATCH for command=%r", command)
-            return {
-                "message": (
-                    "No matching learned skill "
-                    "found."
-                ),
-                "command": command,
-                "resolved_skill": None,
-                "execution_plan": None,
-                "execution_result": None,
-                **_voice_fields(
-                    "No matching learned skill found.",
-                    request.modality,
-                ),
-            }
-
-        skill = get_skill(
-            resolved_skill.skill_id
-        )
-
-        if skill is None:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "Resolved skill could not "
-                    "be found."
-                ),
-            )
-
-        execution_plan = (
-            create_execution_plan(
-                command=command,
-                skill=skill,
-                resolved_skill=resolved_skill,
-            )
-        )
-
-        execution_result = execute_plan(
-            execution_plan
+            modality=request.modality,
         )
 
     except HTTPException:
@@ -599,46 +584,48 @@ def execute_user_command(
             detail="Execution failed unexpectedly - see log.txt.",
         )
 
-    if execution_result.success:
+    reply = pipeline_result.reply
+    voice_payload = _voice_fields(
+        reply.text,
+        request.modality,
+        speakable=reply.speakable,
+    )
+
+    if pipeline_result.resolved_skill is None:
+        log.warning("/execute NO MATCH for command=%r", command)
+    elif pipeline_result.execution_result and pipeline_result.execution_result.success:
         log.info(
             "/execute PASS skill=%r command=%r",
-            resolved_skill.skill_name,
+            pipeline_result.resolved_skill.skill_name,
             command,
         )
-    else:
+    elif pipeline_result.resolved_skill is not None:
         log.warning(
-            "/execute FAIL skill=%r command=%r: %s",
-            resolved_skill.skill_name,
+            "/execute FAIL skill=%r command=%r",
+            pipeline_result.resolved_skill.skill_name,
             command,
-            execution_result.message,
         )
-
-    saved_execution = save_execution(
-        command=command,
-        skill_id=resolved_skill.skill_id,
-        skill_name=resolved_skill.skill_name,
-        environment=resolved_skill.environment,
-        success=execution_result.success,
-        execution_plan=execution_plan.model_dump(),
-        execution_result=execution_result.model_dump(),
-    )
 
     return {
         "message": "Command processed.",
         "command": command,
-        "resolved_skill": resolved_skill,
-        "execution_plan": execution_plan,
-        "execution_result": execution_result,
-        "execution_history": saved_execution,
-        **_voice_fields(
-            execution_result.message,
-            request.modality,
-        ),
+        "resolved_skill": pipeline_result.resolved_skill,
+        "resolved_skills": pipeline_result.resolved_skills,
+        "reasoning": pipeline_result.reasoning,
+        "skill_runs": pipeline_result.skill_runs,
+        "execution_plan": pipeline_result.execution_plan,
+        "execution_result": pipeline_result.execution_result,
+        "execution_history": pipeline_result.execution_history,
+        "reply": reply,
+        "stopped_at_order": pipeline_result.stopped_at_order,
+        **voice_payload,
     }
+
 
 @app.get("/execution-history")
 def get_all_execution_history():
     return get_execution_history()
+
 
 @app.get("/execution-history/{execution_id}")
 def get_execution_history_item(
@@ -655,6 +642,7 @@ def get_execution_history_item(
         )
 
     return execution
+
 
 @app.get("/test-gemini")
 def test_gemini_connection():

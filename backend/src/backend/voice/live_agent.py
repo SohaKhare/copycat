@@ -8,17 +8,16 @@ Run with: uv run python -m backend.voice
 """
 
 import asyncio
-import os
 import traceback
 
 import pyaudio
-from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 
+from backend.ai.gemini_client import create_gemini_client
+from backend.env_config import ensure_env_loaded
 from backend.voice.command_bridge import run_command
 
-load_dotenv()
+ensure_env_loaded()
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -28,8 +27,7 @@ CHUNK_SIZE = 1024
 
 LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
-API_KEY = os.environ.get("GEMINI_API_KEY")
-client = genai.Client(api_key=API_KEY)
+client = create_gemini_client()
 pya = pyaudio.PyAudio()
 
 RUN_COMMAND_TOOL = {
@@ -118,16 +116,16 @@ class VoiceSession:
             # run_command is sync and the browser executor spins up its own
             # event loop internally - can't call it directly inside this
             # already-running loop, so hand it off to a thread.
-            result_text = await asyncio.to_thread(run_command, command)
+            result = await asyncio.to_thread(run_command, command, "voice")
 
-            print(f"[command done] {result_text}\n")
+            print(f"[command done] {result.reply.speakable}\n")
 
             await self.session.send_tool_response(
                 function_responses=[
                     types.FunctionResponse(
                         id=fc.id,
                         name=fc.name,
-                        response={"result": result_text},
+                        response={"result": result.reply.speakable},
                         scheduling="WHEN_IDLE",
                     )
                 ]

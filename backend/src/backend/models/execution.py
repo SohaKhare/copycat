@@ -34,6 +34,30 @@ class ResolvedSkill(BaseModel):
     reasoning: str
 
 
+class ResolvedSkillItem(BaseModel):
+    skill_id: str
+    skill_name: str
+    environment: str
+    parameters: list[SkillParameter]
+    order: int
+    match_confidence: str = "medium"
+
+    def to_resolved_skill(self, reasoning: str = "") -> ResolvedSkill:
+        return ResolvedSkill(
+            skill_id=self.skill_id,
+            skill_name=self.skill_name,
+            environment=self.environment,
+            parameters=self.parameters,
+            match_confidence=self.match_confidence,
+            reasoning=reasoning,
+        )
+
+
+class ResolveSkillsResult(BaseModel):
+    skills: list[ResolvedSkillItem]
+    reasoning: str
+
+
 class ExecutionPlanStep(BaseModel):
     step_number: int
 
@@ -78,3 +102,15 @@ class ExecutionResult(BaseModel):
     details: dict[str, Any] = Field(
         default_factory=dict
     )
+
+
+class SkillRunResult(BaseModel):
+    order: int
+    skill_id: str
+    skill_name: str
+    environment: str
+    success: bool
+    message: str
+    execution_plan: ExecutionPlan
+    execution_result: ExecutionResult
+    execution_history: dict[str, Any] | None = None

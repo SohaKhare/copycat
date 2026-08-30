@@ -4,6 +4,8 @@ ai/planner.py's Windows branch, ai/voice.py). These use google.genai.Client()
 directly rather than going through ADK, so they don't get ADK's built-in retry
 handling - without this, a 429/503 just crashes the request as a bare 500.
 
+Multi-key rotation after retries is handled in ai/gemini_client.call_gemini.
+
 Retries:
 - 429 (rate limit) - ClientError
 - 503 UNAVAILABLE / 500 / 502 / 504 (model overloaded, transient) - ServerError

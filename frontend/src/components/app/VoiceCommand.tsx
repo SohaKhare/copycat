@@ -28,12 +28,7 @@ import { executeCommand, type ExecuteResponse } from "@/lib/api";
  * silent ("speak only on voice turns").
  */
 
-type VoiceState =
-  | "idle"
-  | "recording"
-  | "transcribing"
-  | "running"
-  | "result";
+type VoiceState = "idle" | "recording" | "transcribing" | "running" | "result";
 
 /**
  * Staged progress for a run in flight.
@@ -344,7 +339,10 @@ export function VoiceCommand() {
       "Done.";
 
     return (
-      <Card elevated className="flex flex-col items-center gap-4 p-8 text-center">
+      <Card
+        elevated
+        className="flex flex-col items-center gap-4 p-8 text-center"
+      >
         <span
           className={cn(
             "flex h-12 w-12 items-center justify-center rounded-full",
@@ -419,7 +417,9 @@ export function VoiceCommand() {
           {recording ? "Listening… tap to send" : "Tap to speak"}
         </p>
         <p className="mt-1 text-small text-ink-secondary">
-          {recording ? "CopyCat will reply out loud" : "or type your command below"}
+          {recording
+            ? "CopyCat will reply out loud"
+            : "or type your command below"}
         </p>
         {micUnavailable && (
           <p className="mt-3 text-small text-info">
