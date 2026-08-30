@@ -12,9 +12,10 @@
  */
 
 import { fetchBackend } from "@/lib/backend-fetch";
+import { PROXY_MAX_DURATION_SEC } from "@/lib/proxy-config";
 
 export const runtime = "nodejs";
-export const maxDuration = 1800;
+export const maxDuration = PROXY_MAX_DURATION_SEC;
 
 export async function POST(request: Request): Promise<Response> {
   const contentType = request.headers.get("content-type");

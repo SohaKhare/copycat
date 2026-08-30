@@ -147,3 +147,24 @@ def resolve_browser_model_name() -> str:
         "No AI provider keys found in backend/.env. "
         "Set GEMINI_API_KEY (recommended), or ANTHROPIC_API_KEY / OPENAI_API_KEY."
     )
+
+
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+)
+
+
+def get_cors_allowed_origins() -> list[str]:
+    """
+    Origins allowed to call the API from a browser.
+    Set CORS_ALLOWED_ORIGINS as a comma-separated list (e.g. your Vercel URL).
+    """
+
+    ensure_env_loaded()
+    configured = clean_env(os.getenv("CORS_ALLOWED_ORIGINS"))
+    if not configured:
+        return list(DEFAULT_CORS_ORIGINS)
+
+    origins = [part.strip() for part in configured.split(",") if part.strip()]
+    return origins or list(DEFAULT_CORS_ORIGINS)

@@ -1,7 +1,8 @@
 import { fetchBackend } from "@/lib/backend-fetch";
+import { PROXY_MAX_DURATION_SEC } from "@/lib/proxy-config";
 
 export const runtime = "nodejs";
-export const maxDuration = 1800;
+export const maxDuration = PROXY_MAX_DURATION_SEC;
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 

@@ -1,17 +1,17 @@
 /**
- * Proxy fetch to the FastAPI backend with a long timeout.
+ * Proxy fetch to the FastAPI backend with a configurable timeout.
  *
- * Node's default fetch (undici) times out at 300s, which browser skill runs
- * exceed. Route handlers use this helper instead.
+ * Defaults to 300s to match Vercel Hobby's serverless limit. For longer local
+ * runs, set BACKEND_PROXY_TIMEOUT_MS or point the frontend at the backend
+ * directly via NEXT_PUBLIC_API_URL.
  */
 
 import { Agent, fetch as undiciFetch } from "undici";
 
+import { PROXY_TIMEOUT_MS } from "@/lib/proxy-config";
+
 const BACKEND_ORIGIN =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-/** 30 minutes — browser compositions can run several skills sequentially. */
-const PROXY_TIMEOUT_MS = 30 * 60 * 1000;
 
 const longRunningAgent = new Agent({
   headersTimeout: PROXY_TIMEOUT_MS,
