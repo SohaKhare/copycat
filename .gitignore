@@ -18,6 +18,10 @@ backend/frames/
 # Local data
 backend/data/
 
+# Runtime log
+backend/log.txt
+backend/log.txt.*
+
 # IDE
 .vscode/
 .idea/

@@ -1,15 +1,23 @@
 import asyncio
+import base64
 from asyncio import to_thread
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from google.genai.errors import ServerError
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
+from google.genai.errors import ClientError, ServerError
 
+from backend.logging_setup import log
 from backend.voice.live_agent import VoiceSession
 
 from backend.ai.gemini import analyze_frames, test_gemini
 from backend.ai.skill_resolver import resolve_skill
+from backend.ai.voice import (
+    summarize_for_speech,
+    synthesize_speech,
+    transcribe_command,
+)
 
 from backend.models.execution import ExecuteRequest
 from backend.models.skill import EditSkillRequest, Skill
@@ -53,6 +61,40 @@ FRAMES_DIR.mkdir(exist_ok=True)
 _voice_session: VoiceSession | None = None
 _voice_task: asyncio.Task | None = None
 
+log.info("CopyCat API starting up")
+
+
+@app.exception_handler(HTTPException)
+async def _log_http_exception(request: Request, exc: HTTPException):
+    # 4xx are expected (bad input, no match); log them at a lower level so the
+    # file still shows what the client hit, without looking like a crash.
+    level = log.warning if exc.status_code < 500 else log.error
+    level(
+        "%s %s -> %s: %s",
+        request.method,
+        request.url.path,
+        exc.status_code,
+        exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled_exception(request: Request, exc: Exception):
+    log.exception(
+        "UNHANDLED exception on %s %s",
+        request.method,
+        request.url.path,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error - see log.txt."},
+    )
+
 
 @app.get("/")
 def root():
@@ -90,6 +132,8 @@ async def upload_video(file: UploadFile = File(...)):
         buffer.write(contents)
 
     video_frames_dir = FRAMES_DIR / video_id
+
+    log.info("/upload-video %s (%s bytes)", file.filename, len(contents))
 
     try:
         # extract_frames decodes every frame and analyze_frames calls the
@@ -129,12 +173,14 @@ async def upload_video(file: UploadFile = File(...)):
             saved_skills.append(created_skill)
 
     except ValueError as error:
+        log.warning("/upload-video rejected %s: %s", file.filename, error)
         raise HTTPException(
             status_code=400,
             detail=str(error),
         )
 
     except ServerError:
+        log.error("/upload-video: Gemini unavailable", exc_info=True)
         raise HTTPException(
             status_code=503,
             detail=(
@@ -142,6 +188,20 @@ async def upload_video(file: UploadFile = File(...)):
                 "Please try again later."
             ),
         )
+
+    except Exception:
+        log.exception("/upload-video crashed for %s", file.filename)
+        raise HTTPException(
+            status_code=500,
+            detail="Video processing failed unexpectedly - see log.txt.",
+        )
+
+    log.info(
+        "/upload-video OK %s -> %d frame(s), %d candidate skill(s)",
+        file.filename,
+        len(frames),
+        len(saved_skills),
+    )
 
     return {
         "message": "Video analyzed and candidate skill saved successfully!",
@@ -337,10 +397,108 @@ def resolve_user_skill(
         "resolved_skill": resolved_skill,
     }
 
+_QUOTA_MESSAGE = (
+    "Gemini's rate limit / free-tier quota is exhausted right now. "
+    "Wait ~30 seconds and try again, or add a second GEMINI_API_KEY_2 in .env."
+)
+
+
+def _voice_fields(text: str, modality: str) -> dict:
+    """
+    Build the text/speakable/audio part of an /execute reply.
+
+    Only voice turns get a spoken reply ("speak only on voice turns"). A TTS
+    failure degrades to text - it never fails the command.
+    """
+
+    if modality != "voice":
+        return {
+            "text": text,
+            "speakable": None,
+            "modality": modality,
+            "audio_b64": None,
+            "audio_mime": None,
+        }
+
+    try:
+        speakable = summarize_for_speech(text)
+        wav_bytes, audio_mime = synthesize_speech(speakable)
+
+        return {
+            "text": text,
+            "speakable": speakable,
+            "modality": modality,
+            "audio_b64": base64.b64encode(wav_bytes).decode(),
+            "audio_mime": audio_mime,
+        }
+
+    except Exception:
+        log.exception("voice reply (speakable/TTS) failed; returning text only")
+        return {
+            "text": text,
+            "speakable": text[:200],
+            "modality": modality,
+            "audio_b64": None,
+            "audio_mime": None,
+        }
+
+
 @app.post("/execute")
 def execute_user_command(
     request: ExecuteRequest,
 ):
+    if request.audio_b64:
+        try:
+            audio = base64.b64decode(request.audio_b64)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail="audio_b64 is not valid base64.",
+            )
+
+        try:
+            command = transcribe_command(
+                audio,
+                f"audio/{request.audio_format}",
+            )
+        except ClientError as error:
+            if error.code == 429:
+                log.warning("/execute transcription: quota/rate limit hit")
+                raise HTTPException(
+                    status_code=429,
+                    detail=_QUOTA_MESSAGE,
+                )
+            log.exception("/execute transcription: client error")
+            raise HTTPException(
+                status_code=400,
+                detail="Could not transcribe the audio.",
+            )
+        except ServerError:
+            log.error("/execute transcription: Gemini unavailable", exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Gemini is temporarily unavailable. "
+                    "Please try again later."
+                ),
+            )
+        except Exception:
+            log.exception("/execute transcription failed (audio_format=%s)", request.audio_format)
+            raise HTTPException(
+                status_code=400,
+                detail="Could not transcribe the audio.",
+            )
+    else:
+        command = request.command
+
+    if not command:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not make out a command.",
+        )
+
+    log.info("/execute [%s] command=%r", request.modality, command)
+
     accepted_skills = (
         get_accepted_skills()
     )
@@ -355,20 +513,25 @@ def execute_user_command(
 
     try:
         resolved_skill = resolve_skill(
-            command=request.command,
+            command=command,
             skills=accepted_skills,
         )
 
         if resolved_skill is None:
+            log.warning("/execute NO MATCH for command=%r", command)
             return {
                 "message": (
                     "No matching learned skill "
                     "found."
                 ),
-                "command": request.command,
+                "command": command,
                 "resolved_skill": None,
                 "execution_plan": None,
                 "execution_result": None,
+                **_voice_fields(
+                    "No matching learned skill found.",
+                    request.modality,
+                ),
             }
 
         skill = get_skill(
@@ -386,7 +549,7 @@ def execute_user_command(
 
         execution_plan = (
             create_execution_plan(
-                command=request.command,
+                command=command,
                 skill=skill,
                 resolved_skill=resolved_skill,
             )
@@ -396,13 +559,31 @@ def execute_user_command(
             execution_plan
         )
 
+    except HTTPException:
+        raise
+
+    except ClientError as error:
+        if getattr(error, "code", None) == 429:
+            log.warning("/execute: quota/rate limit hit (command=%r)", command)
+            raise HTTPException(status_code=429, detail=_QUOTA_MESSAGE)
+        log.exception("/execute: Gemini client error (command=%r)", command)
+        raise HTTPException(status_code=400, detail=str(error))
+
     except ValueError as error:
+        log.warning(
+            "/execute plan/exec ValueError for command=%r: %s", command, error
+        )
         raise HTTPException(
             status_code=400,
             detail=str(error),
         )
 
     except ServerError:
+        log.error(
+            "/execute plan/exec: Gemini unavailable (command=%r)",
+            command,
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=503,
             detail=(
@@ -411,8 +592,29 @@ def execute_user_command(
             ),
         )
 
+    except Exception:
+        log.exception("/execute plan/exec crashed for command=%r", command)
+        raise HTTPException(
+            status_code=500,
+            detail="Execution failed unexpectedly - see log.txt.",
+        )
+
+    if execution_result.success:
+        log.info(
+            "/execute PASS skill=%r command=%r",
+            resolved_skill.skill_name,
+            command,
+        )
+    else:
+        log.warning(
+            "/execute FAIL skill=%r command=%r: %s",
+            resolved_skill.skill_name,
+            command,
+            execution_result.message,
+        )
+
     saved_execution = save_execution(
-        command=request.command,
+        command=command,
         skill_id=resolved_skill.skill_id,
         skill_name=resolved_skill.skill_name,
         environment=resolved_skill.environment,
@@ -423,11 +625,15 @@ def execute_user_command(
 
     return {
         "message": "Command processed.",
-        "command": request.command,
+        "command": command,
         "resolved_skill": resolved_skill,
         "execution_plan": execution_plan,
         "execution_result": execution_result,
         "execution_history": saved_execution,
+        **_voice_fields(
+            execution_result.message,
+            request.modality,
+        ),
     }
 
 @app.get("/execution-history")

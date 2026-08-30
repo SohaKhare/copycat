@@ -3,28 +3,20 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from google import genai
 from PIL import Image
 
-from backend.ai.retry import gemini_retry
+from backend.ai.gemini_client import call_gemini
 from backend.models.learning import LearningResult
 
 
 load_dotenv()
 
+ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gemini-3.1-flash-lite")
+
 
 def test_gemini():
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY was not found in the environment."
-        )
-
-    client = genai.Client(api_key=api_key)
-
-    response = client.models.generate_content(
-        model="gemini-3.5-flash-lite",
+    response = call_gemini(
+        model=ANALYSIS_MODEL,
         contents="Say hello to CopyCat in one short sentence.",
     )
 
@@ -36,15 +28,6 @@ def analyze_frames(frames: list[dict]):
     Analyze a screen-recorded demonstration and identify
     a reusable candidate skill with ordered execution steps.
     """
-
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY was not found in the environment."
-        )
-
-    client = genai.Client(api_key=api_key)
 
     prompt = """
 You are analyzing a screen-recorded demonstration for CopyCat,
@@ -159,10 +142,7 @@ Return one candidate skill for the main demonstrated task.
 
         contents.append(image)
 
-    response = gemini_retry(client.models.generate_content)(
-        model="gemini-3.1-flash-lite",
-        contents=contents,
-    )
+    response = call_gemini(model=ANALYSIS_MODEL, contents=contents)
 
     cleaned_text = clean_json_response(response.text)
 

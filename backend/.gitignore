@@ -17,6 +17,10 @@ frames/
 # Local data
 data/
 
+# Runtime log (backend/src/backend/logging_setup.py)
+log.txt
+log.txt.*
+
 # IDE files
 .vscode/
 .idea/

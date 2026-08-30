@@ -1,10 +1,23 @@
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ExecuteRequest(BaseModel):
-    command: str
+    # Either a typed command or base64 audio (Gemini transcribes it). `modality`
+    # decides whether the reply is spoken back - "speak only on voice turns".
+    command: str | None = None
+    audio_b64: str | None = None
+    audio_format: str = "webm"
+    modality: Literal["text", "voice"] = "text"
+
+    @model_validator(mode="after")
+    def _need_input(self) -> "ExecuteRequest":
+        if not self.command and not self.audio_b64:
+            raise ValueError(
+                "Provide either 'command' or 'audio_b64'."
+            )
+        return self
 
 
 class SkillParameter(BaseModel):

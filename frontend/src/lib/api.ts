@@ -143,7 +143,25 @@ export type ExecuteResponse = {
   execution_plan: ExecutionPlan | null;
   execution_result: ExecutionResult | null;
   execution_history?: Record<string, unknown> | null;
+  /** Full UI message (mirrors execution_result.message on a normal run). */
+  text: string;
+  /** Short spoken sentence — null on text turns. */
+  speakable: string | null;
+  modality: "text" | "voice";
+  /** base64 WAV of `speakable` — null on text turns or if TTS failed. */
+  audio_b64: string | null;
+  audio_mime: string | null;
 };
+
+/** Input to executeCommand — a bare string is the typed-command shorthand. */
+export type ExecuteInput =
+  | string
+  | {
+      command?: string;
+      audio_b64?: string;
+      audio_format?: string;
+      modality?: "text" | "voice";
+    };
 
 /** Row from Supabase execution_history. */
 export type ExecutionHistoryRecord = {
@@ -170,13 +188,20 @@ export class ApiError extends Error {
 }
 
 function messageFromErrorBody(body: unknown, status: number): string {
-  if (
-    body &&
-    typeof body === "object" &&
-    "detail" in body &&
-    typeof (body as { detail: unknown }).detail === "string"
-  ) {
-    return (body as { detail: string }).detail;
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail;
+    if (typeof detail === "string") return detail;
+    // FastAPI validation errors: detail is an array of { loc, msg, ... }.
+    if (Array.isArray(detail)) {
+      const parts = detail
+        .map((item) =>
+          item && typeof item === "object" && "msg" in item
+            ? String((item as { msg: unknown }).msg)
+            : null,
+        )
+        .filter(Boolean);
+      if (parts.length) return parts.join("; ");
+    }
   }
   return `The request failed with status ${status}.`;
 }
@@ -251,10 +276,15 @@ export function resolveSkill(command: string): Promise<ResolveSkillResponse> {
   });
 }
 
-export function executeCommand(command: string): Promise<ExecuteResponse> {
+export function executeCommand(input: ExecuteInput): Promise<ExecuteResponse> {
+  const body =
+    typeof input === "string"
+      ? { command: input, modality: "text" as const }
+      : { modality: "text" as const, ...input };
+
   return requestJson<ExecuteResponse>("/execute", {
     method: "POST",
-    body: JSON.stringify({ command }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -364,97 +394,9 @@ export function uploadVideo(
   });
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(apiUrl(path), init);
-  } catch {
-    throw new ApiError(
-      0,
-      "CopyCat couldn't reach the server. Make sure the backend is running, then try again.",
-    );
-  }
-
-  let body: unknown = null;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
-
-  if (!response.ok) {
-    throw new ApiError(response.status, messageFromErrorBody(body, response.status));
-  }
-
-  return body as T;
-}
-
-/** GET /skills */
-export function getSkills(): Promise<SavedSkill[]> {
-  return apiFetch<SavedSkill[]>("/skills");
-}
-
-/** POST /skills/{id}/accept */
-export function acceptSkill(id: string): Promise<{ message: string; skill: SavedSkill }> {
-  return apiFetch(`/skills/${id}/accept`, { method: "POST" });
-}
-
-/** POST /skills/{id}/reject */
-export function rejectSkill(id: string): Promise<{ message: string; skill: SavedSkill }> {
-  return apiFetch(`/skills/${id}/reject`, { method: "POST" });
-}
-
-/** A resolved skill match, as returned by resolve_skill(). */
-export type ResolvedSkill = {
-  skill_id: string;
-  skill_name: string;
-  environment: string;
-  parameters: { name: string; value: unknown }[];
-  match_confidence: string;
-  reasoning: string;
-};
-
-/** Mirrors backend.models.execution.ExecutionResult. */
-export type ExecutionResult = {
-  success: boolean;
-  message: string;
-  skill_id: string;
-  details?: Record<string, unknown>;
-};
-
-/** Exact 200 response of POST /execute. */
-export type ExecuteResponse = {
-  message: string;
-  command: string;
-  resolved_skill: ResolvedSkill | null;
-  execution_plan: Record<string, unknown> | null;
-  execution_result: ExecutionResult | null;
-  execution_history?: Record<string, unknown>;
-};
-
-/** POST /execute */
-export function executeCommand(command: string): Promise<ExecuteResponse> {
-  return apiFetch<ExecuteResponse>("/execute", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ command }),
-  });
-}
-
-/** One row from backend.storage.execution_history (Supabase). */
-export type ExecutionHistoryItem = {
-  id: string;
-  command: string;
-  skill_id: string;
-  skill_name: string;
-  environment: string;
-  success: boolean;
-  execution_plan: Record<string, unknown>;
-  execution_result: Record<string, unknown>;
-  created_at?: string;
-};
-
-/** GET /execution-history */
-export function getExecutionHistory(): Promise<ExecutionHistoryItem[]> {
-  return apiFetch<ExecutionHistoryItem[]>("/execution-history");
-}
+/**
+ * Back-compat alias: an earlier revision of this file exported a second,
+ * duplicate client where the execution-history row type was named
+ * `ExecutionHistoryItem`. Kept as an alias so existing imports keep working.
+ */
+export type ExecutionHistoryItem = ExecutionHistoryRecord;

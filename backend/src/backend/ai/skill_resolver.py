@@ -2,13 +2,14 @@ import json
 import os
 
 from dotenv import load_dotenv
-from google import genai
 
-from backend.ai.retry import gemini_retry
+from backend.ai.gemini_client import call_gemini
 from backend.models.execution import ResolvedSkill
 
 
 load_dotenv()
+
+RESOLVER_MODEL = os.getenv("RESOLVER_MODEL", "gemini-3.1-flash-lite")
 
 
 def resolve_skill(
@@ -19,15 +20,6 @@ def resolve_skill(
     Determine which accepted skill best matches
     the user's command and extract relevant parameters.
     """
-
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY was not found in the environment."
-        )
-
-    client = genai.Client(api_key=api_key)
 
     prompt = f"""
 You are the Skill Resolver for CopyCat.
@@ -78,10 +70,7 @@ Use exactly this structure:
 }}
 """
 
-    response = gemini_retry(client.models.generate_content)(
-        model="gemini-3.1-flash-lite",
-        contents=prompt,
-    )
+    response = call_gemini(model=RESOLVER_MODEL, contents=prompt)
 
     cleaned_text = clean_json_response(
         response.text

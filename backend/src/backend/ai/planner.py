@@ -2,9 +2,8 @@ import json
 import os
 
 from dotenv import load_dotenv
-from google import genai
 
-from backend.ai.retry import gemini_retry
+from backend.ai.gemini_client import call_gemini
 from backend.models.execution import (
     ExecutionPlan,
     ExecutionPlanStep,
@@ -13,6 +12,8 @@ from backend.models.execution import (
 
 
 load_dotenv()
+
+PLANNER_MODEL = os.getenv("PLANNER_MODEL", "gemini-3.1-flash-lite")
 
 
 WORKSPACE_PATH = (
@@ -43,17 +44,6 @@ def create_execution_plan(
             skill=skill,
             resolved_skill=resolved_skill,
         )
-
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY was not found in the environment."
-        )
-
-    client = genai.Client(
-        api_key=api_key
-    )
 
     resolved_skill_data = (
         resolved_skill.model_dump()
@@ -176,12 +166,7 @@ Use exactly this structure:
 }}
 """
 
-    response = (
-        gemini_retry(client.models.generate_content)(
-            model="gemini-3.1-flash-lite",
-            contents=prompt,
-        )
-    )
+    response = call_gemini(model=PLANNER_MODEL, contents=prompt)
 
     cleaned_text = clean_json_response(
         response.text
