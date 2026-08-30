@@ -12,10 +12,10 @@
  */
 
 import { fetchBackend } from "@/lib/backend-fetch";
-import { PROXY_MAX_DURATION_SEC } from "@/lib/proxy-config";
 
 export const runtime = "nodejs";
-export const maxDuration = PROXY_MAX_DURATION_SEC;
+/** Vercel Hobby max; proxy is fallback when NEXT_PUBLIC_API_URL is unset. */
+export const maxDuration = 300;
 
 export async function POST(request: Request): Promise<Response> {
   const contentType = request.headers.get("content-type");
