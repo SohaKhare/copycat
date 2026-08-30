@@ -1,0 +1,22 @@
+# Environment variables / secrets
+.env
+
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Generated uploads
+uploads/
+
+# Extracted video frames
+frames/
+
+# Local data
+data/
+
+# IDE files
+.vscode/
+.idea/
